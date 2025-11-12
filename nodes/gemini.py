@@ -69,13 +69,6 @@ def get_pils(image_1, image_2, image_3, image_4):
     return out
 
 def get_safety_settings(level):
-    if level == "none":
-        return [
-            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
-            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        ]
     if level == "minimum":
         return [
             {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_ONLY_HIGH},
@@ -97,7 +90,14 @@ def get_safety_settings(level):
             {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE},
             {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE},
         ]
-    return []
+    
+    # Default to "none" for any other case, including "none" or invalid values
+    return [
+        {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    ]
 
 class ETNodesGeminiApiImage:
     """
@@ -113,11 +113,12 @@ class ETNodesGeminiApiImage:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "A photorealistic elephant.", "tooltip": "The text prompt to generate an image from."}),
                 "model": (["gemini-2.5-flash-image"], {"tooltip": "The model to use for image generation and editing."}),
-                "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation."}),
-                "aspect_ratio": (["auto", "1:1", "16:9", "9:16", "21:9", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5"], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image."}),
+                "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNote that even the 'none' setting may still apply some core safety filters."}),
+                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image."}),
+                "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
-                "API_key": ("STRING", {"multiline": False, "tooltip": "Your Gemini API key.\n\nAdd the API key to a GEMINI_API_KEY environment variable\nand leave this field blank for more convenience and security."}),
+                "API_key": ("STRING", {"multiline": False, "default": "","tooltip": "Your Gemini API key.\n\nAdd the API key to a GEMINI_API_KEY environment variable\nand leave this field blank for more convenience and security."}),
                 "image_1": ("IMAGE", {"tooltip": "Optional input image 1. If no image is provided, a new image will be generated based on the prompt."}),
                 "image_2": ("IMAGE", {"tooltip": "Optional input image 2."}),
                 "image_3": ("IMAGE", {"tooltip": "Optional input image 3."}),
@@ -128,7 +129,7 @@ class ETNodesGeminiApiImage:
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "execute"
     
-    def execute(self, prompt, model, safety_level, aspect_ratio, API_key=None, image_1=None, image_2=None, image_3=None, image_4=None):
+    def execute(self, prompt, model, safety_level, aspect_ratio, seed, API_key=None, image_1=None, image_2=None, image_3=None, image_4=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -201,13 +202,21 @@ class ETNodesGeminiApiImage:
 
         if not images:
             text_response = " ".join(text_responses)
+            
+            # Check for safety feedback first
             if "promptFeedback" in response_data and "blockReason" in response_data["promptFeedback"]:
                 reason = response_data['promptFeedback']['blockReason']
                 message = f"Request was blocked due to safety settings. Reason: {reason}"
                 if text_response:
                     message += f". Model response: {text_response}"
                 raise Exception(message)
-            
+
+            # Check for finishMessage in candidates
+            if "candidates" in response_data:
+                for candidate in response_data["candidates"]:
+                    if "finishMessage" in candidate and candidate.get("finishReason") == "IMAGE_SAFETY":
+                        raise Exception(f"Image generation failed due to safety settings: {candidate['finishMessage']}")
+
             if text_response:
                 raise Exception(f"No image was generated. The model returned text instead: {text_response}")
             
