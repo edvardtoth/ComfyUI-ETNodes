@@ -14,7 +14,7 @@ A collection of custom nodes for ComfyUI
 
 # Features
 
-- A list of features
+- **Gemini API Image Node**: A powerful node that allows you to generate and edit images using Google's Gemini API. It supports both text-to-image and image-to-image generation, with adjustable safety settings and aspect ratios.
 
 ## Develop
 
