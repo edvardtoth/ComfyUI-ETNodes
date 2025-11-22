@@ -1,3 +1,5 @@
+#ETNodes Gemini API Nodes by Edvard Toth - https://edvardtoth.com
+
 import torch
 import os
 import sys
@@ -78,6 +80,13 @@ def get_pils(image_1, image_2, image_3, image_4):
     return out
 
 def get_safety_settings(level):
+    if level == "off":
+        return [
+            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": "OFF"},
+            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": "OFF"},
+            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": "OFF"},
+            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": "OFF"},
+        ]
     if level == "minimum":
         return [
             {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_ONLY_HIGH},
@@ -121,30 +130,34 @@ class ETNodesGeminiApiImage:
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "A photorealistic elephant.", "tooltip": "The text prompt to generate an image from."}),
-                "model": (["gemini-2.5-flash-image"], {"tooltip": "The model to use for image generation and editing."}),
-                "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNote that even the 'none' setting may still apply some core safety filters."}),
-                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image."}),
+                "model": (["gemini-3-pro-image-preview", "gemini-2.5-flash-image"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing."}),
+                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
+                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image(s)."}),
+                "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (gemini-3-pro-image-preview only)."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
                 "API_key": ("STRING", {"multiline": False, "default": "","tooltip": "Your Gemini API key.\n\nAdd the API key to a GEMINI_API_KEY environment variable\nand leave this field blank for more convenience and security."}),
-                "image_1": ("IMAGE", {"tooltip": "Optional input image 1. If no image is provided, a new image will be generated based on the prompt."}),
-                "image_2": ("IMAGE", {"tooltip": "Optional input image 2."}),
-                "image_3": ("IMAGE", {"tooltip": "Optional input image 3."}),
-                "image_4": ("IMAGE", {"tooltip": "Optional input image 4."}),
+                "images": ("IMAGE", {"tooltip": "Optional batch of input images.\nUp to 14 images for gemini-3-pro-image-preview.\nUp to 4 images for gemini-2.5-flash-image."}),
             }
         }
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "execute"
     
-    def execute(self, prompt, model, safety_level, aspect_ratio, seed, API_key=None, image_1=None, image_2=None, image_3=None, image_4=None):
+    def execute(self, prompt, model, safety_level, aspect_ratio, resolution, seed, API_key=None, images=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
             raise Exception("Gemini API Key not found. Please provide it in the node's input or set the GEMINI_API_KEY environment variable.")
 
-        pils = get_pils(image_1, image_2, image_3, image_4)
+        parts = []
+        pils = []
+        if images is not None:
+            if model == "gemini-3-pro-image-preview" and len(images) > 14:
+                raise Exception("The gemini-3-pro-image-preview model supports a maximum of 14 images.")
+            for image in images:
+                pils.append(to_pil(image))
 
         if prompt.strip() == "" and not pils:
             raise Exception("Either a prompt or at least one image is required.")
@@ -170,12 +183,16 @@ class ETNodesGeminiApiImage:
                 "topP": 0.95,
                 "topK": 64,
                 "maxOutputTokens": 32768,
+                "responseModalities": ["IMAGE"],
                 "imageConfig": {
                     "aspectRatio": aspect_ratio
                 }
             },
             "safetySettings": get_safety_settings(safety_level)
         }
+
+        if model == "gemini-3-pro-image-preview":
+            payload["generationConfig"]["imageConfig"]["imageSize"] = resolution
 
         if aspect_ratio == "auto":
             del payload["generationConfig"]["imageConfig"]
@@ -200,7 +217,7 @@ class ETNodesGeminiApiImage:
         text_responses = []
         if "candidates" in response_data:
             for candidate in response_data["candidates"]:
-                if "content" in candidate:
+                if "content" in candidate and "parts" in candidate["content"]:
                     for part in candidate["content"]["parts"]:
                         if "inlineData" in part and part["inlineData"]["mimeType"].startswith("image/"):
                             image_data = base64.b64decode(part["inlineData"]["data"])
@@ -225,6 +242,8 @@ class ETNodesGeminiApiImage:
                 for candidate in response_data["candidates"]:
                     if "finishMessage" in candidate and candidate.get("finishReason") == "IMAGE_SAFETY":
                         raise Exception(f"Image generation failed due to safety settings: {candidate['finishMessage']}")
+                    if candidate.get("finishReason") == "NO_IMAGE":
+                        raise Exception("Image generation failed: The model chose not to generate an image for this prompt.")
 
             if text_response:
                 raise Exception(f"No image was generated. The model returned text instead: {text_response}")
@@ -245,8 +264,8 @@ class ETNodesGeminiApiText:
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "Describe the attached image.", "tooltip": "The text prompt for the model."}),
-                "model": (["gemini-2.5-flash", "gemini-2.5-pro"], {"default": "gemini-2.5-flash", "tooltip": "The model to use for input file analysis and text generation."}),
-                "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNote that even the 'none' setting may still apply some core safety filters."}),
+                "model": (["gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"], {"default": "gemini-3-pro-preview", "tooltip": "The model to use for input file analysis and text generation."}),
+                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -338,7 +357,7 @@ class ETNodesGeminiApiText:
                 "temperature": 1,
                 "topP": 0.95,
                 "topK": 64,
-                "maxOutputTokens": 8192,
+                "maxOutputTokens": 32768,
             },
             "safetySettings": get_safety_settings(safety_level)
         }
