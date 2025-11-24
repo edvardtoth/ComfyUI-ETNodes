@@ -129,7 +129,7 @@ class ETNodesGeminiApiImage:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": "A photorealistic elephant.", "tooltip": "The text prompt to generate an image from."}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt to generate an image from."}),
                 "model": (["gemini-3-pro-image-preview", "gemini-2.5-flash-image"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing."}),
                 "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
                 "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image(s)."}),
@@ -176,6 +176,13 @@ class ETNodesGeminiApiImage:
                 }
             })
 
+        image_config = {}
+        if aspect_ratio != "auto":
+            image_config["aspectRatio"] = aspect_ratio
+        
+        if model == "gemini-3-pro-image-preview":
+            image_config["imageSize"] = resolution
+
         payload = {
             "contents": [{"parts": parts}],
             "generationConfig": {
@@ -184,18 +191,12 @@ class ETNodesGeminiApiImage:
                 "topK": 64,
                 "maxOutputTokens": 32768,
                 "responseModalities": ["IMAGE"],
-                "imageConfig": {
-                    "aspectRatio": aspect_ratio
-                }
             },
             "safetySettings": get_safety_settings(safety_level)
         }
-
-        if model == "gemini-3-pro-image-preview":
-            payload["generationConfig"]["imageConfig"]["imageSize"] = resolution
-
-        if aspect_ratio == "auto":
-            del payload["generationConfig"]["imageConfig"]
+        
+        if image_config:
+            payload["generationConfig"]["imageConfig"] = image_config
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_key}"
         headers = {"Content-Type": "application/json"}
@@ -263,7 +264,8 @@ class ETNodesGeminiApiText:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": "Describe the attached image.", "tooltip": "The text prompt for the model."}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt for the model."}),
+                "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior."}),
                 "model": (["gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"], {"default": "gemini-3-pro-preview", "tooltip": "The model to use for input file analysis and text generation."}),
                 "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
@@ -279,7 +281,7 @@ class ETNodesGeminiApiText:
     RETURN_TYPES = ("STRING",)
     FUNCTION = "execute"
 
-    def execute(self, prompt, model, safety_level, seed, API_key=None, images=None, audio=None, video=None):
+    def execute(self, prompt, system_prompt, model, safety_level, seed, API_key=None, images=None, audio=None, video=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -361,6 +363,11 @@ class ETNodesGeminiApiText:
             },
             "safetySettings": get_safety_settings(safety_level)
         }
+
+        if system_prompt and system_prompt.strip():
+            payload["system_instruction"] = {
+                "parts": [{"text": system_prompt}]
+            }
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_key}"
         headers = {"Content-Type": "application/json"}
