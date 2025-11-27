@@ -1,3 +1,4 @@
+#ETNodes by Edvard Toth - https://edvardtoth.com
 import os
 import importlib.util
 import sys
@@ -7,6 +8,7 @@ sys.path.append(os.path.dirname(__file__))
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
+WEB_DIRECTORY = "./js"
 
 # Get the directory of the current script
 current_dir = os.path.dirname(os.path.abspath(__file__))
