@@ -132,9 +132,10 @@ class ETNodesGeminiApiImage:
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt to generate an image from."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
                 "model": (["gemini-3-pro-image-preview", "gemini-2.5-flash-image"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing."}),
-                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
-                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image(s)."}),
                 "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (gemini-3-pro-image-preview only)."}),
+                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image(s)."}),
+                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
+                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -146,7 +147,7 @@ class ETNodesGeminiApiImage:
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "execute"
     
-    def execute(self, prompt, system_prompt, model, safety_level, aspect_ratio, resolution, seed, API_key=None, images=None):
+    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, aspect_ratio, resolution, seed, API_key=None, images=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -196,6 +197,9 @@ class ETNodesGeminiApiImage:
             "safetySettings": get_safety_settings(safety_level)
         }
         
+        if search_grounding == "on":
+             payload["tools"] = [{"googleSearch": {}}]
+
         if image_config:
             payload["generationConfig"]["imageConfig"] = image_config
 
@@ -274,6 +278,7 @@ class ETNodesGeminiApiText:
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
                 "model": (["gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"], {"default": "gemini-3-pro-preview", "tooltip": "The model to use for input file analysis and text generation."}),
                 "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
+                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -287,7 +292,7 @@ class ETNodesGeminiApiText:
     RETURN_TYPES = ("STRING",)
     FUNCTION = "execute"
 
-    def execute(self, prompt, system_prompt, model, safety_level, seed, API_key=None, images=None, audio=None, video=None):
+    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, seed, API_key=None, images=None, audio=None, video=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -369,6 +374,9 @@ class ETNodesGeminiApiText:
             },
             "safetySettings": get_safety_settings(safety_level)
         }
+
+        if search_grounding == "on":
+            payload["tools"] = [{"googleSearch": {}}]
 
         if system_prompt and system_prompt.strip():
             payload["system_instruction"] = {
