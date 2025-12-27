@@ -146,38 +146,37 @@ class ETNodesGeminiApiImage:
             contents.append(prompt)
         contents.extend(pils)
 
-        image_config = {}
-        if aspect_ratio != "auto":
-            image_config["aspectRatio"] = aspect_ratio
-        
-        if model == "gemini-3-pro-image-preview":
-            image_config["imageSize"] = resolution
+        image_config = None
+        if aspect_ratio != "auto" or model == "gemini-3-pro-image-preview":
+            img_conf_params = {}
+            if aspect_ratio != "auto":
+                img_conf_params["aspect_ratio"] = aspect_ratio
+            if model == "gemini-3-pro-image-preview":
+                 img_conf_params["image_size"] = resolution
+            # Use dict instead of types.ImageConfig to avoid version compatibility issues
+            image_config = img_conf_params
 
-        # Construct configuration
-        config_dict = {
-            "temperature": 1,
-            "top_p": 0.95,
-            "top_k": 64,
-            "max_output_tokens": 32768,
-            "response_modalities": ["IMAGE"],
-            "safety_settings": get_safety_settings(safety_level),
-        }
+        # Construct configuration using types
+        config = types.GenerateContentConfig(
+            temperature=1,
+            top_p=0.95,
+            top_k=64,
+            max_output_tokens=32768,
+            response_modalities=["IMAGE"],
+            safety_settings=get_safety_settings(safety_level),
+            image_config=image_config,
+            system_instruction=system_prompt if system_prompt and system_prompt.strip() else None
+        )
 
         if search_grounding == "on":
              if model != "gemini-2.5-flash-image":
-                 config_dict["tools"] = [{"google_search": {}}]
-
-        if image_config:
-            config_dict["image_config"] = image_config
-        
-        if system_prompt and system_prompt.strip():
-            config_dict["system_instruction"] = system_prompt
+                 config.tools = [{"google_search": {}}]
 
         try:
             response = client.models.generate_content(
                 model=model,
                 contents=contents,
-                config=config_dict
+                config=config
             )
         except Exception as e:
             raise Exception(f"API request failed: {e}")
@@ -367,6 +366,6 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ETNodes-Gemini-API-Image": "ΞΓNodes Gemini API Image",
-    "ETNodes-Gemini-API-Text": "ΞΓNodes Gemini API Text"
+    "ETNodes-Gemini-API-Image": "ETNodes Gemini API Image",
+    "ETNodes-Gemini-API-Text": "ETNodes Gemini API Text"
 }
