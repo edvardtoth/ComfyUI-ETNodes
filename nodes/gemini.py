@@ -71,24 +71,17 @@ def get_pils(image_1, image_2, image_3, image_4):
     return out
 
 def get_safety_settings(level):
-    # Map levels to thresholds
-    # "off": Disable entirely (BLOCK_NONE)
-    # "none": Matches tooltip "Will still block high-severity content" (BLOCK_ONLY_HIGH). 
-    #         Legacy code used BLOCK_NONE, but new SDK behavior might differ. 
-    #         Let's stick to BLOCK_NONE for "none" to match old code behavior exactly if that was the intent,
-    #         OR change to BLOCK_ONLY_HIGH if "none" implies some safety.
-    #         The tooltip says "Will still block high-severity content". BLOCK_NONE blocks nothing.
-    #         However, user complained about "too lenient". If I change "none" to BLOCK_ONLY_HIGH, it becomes stricter.
-    #         Let's use dictionary mapping for clarity.
     
     threshold = "BLOCK_NONE"
-    if level == "minimum":
+    if level == "off":
+        threshold = "OFF"
+    elif level == "minimum":
         threshold = "BLOCK_ONLY_HIGH"
     elif level == "medium":
         threshold = "BLOCK_MEDIUM_AND_ABOVE"
     elif level == "maximum":
         threshold = "BLOCK_LOW_AND_ABOVE"
-    # "off" and "none" fall through to BLOCK_NONE
+    # "none" falls through to BLOCK_NONE
     
     return [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": threshold},
