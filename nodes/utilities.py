@@ -99,9 +99,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
     # Title formatting is intentional, don't alter
 
-    "ETNodes-List-Items": "ΞΓNodes List Items",
-    "ETNodes-List-Selector": "ΞΓNodes List Selector",
-    "ETNodes-Color-Selector": "ΞΓNodes Color Selector",
-    "ETNodes-Text-Preview": "ΞΓNodes Text Preview",
+    "ETNodes-List-Items": "ETNodes List Items",
+    "ETNodes-List-Selector": "ETNodes List Selector",
+    "ETNodes-Color-Selector": "ETNodes Color Selector",
+    "ETNodes-Text-Preview": "ETNodes Text Preview",
 }
 
