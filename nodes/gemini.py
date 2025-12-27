@@ -7,7 +7,7 @@ import subprocess
 import io
 import numpy as np
 import random
-import json
+
 import base64
 import folder_paths
 
@@ -25,21 +25,17 @@ except:
         pass
 
 try:
-    import google.generativeai as genai
-    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+    from google import genai
+    from google.genai import types
 except:
     try:
-        subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', 'google-generativeai'])
-        import google.generativeai as genai
-        from google.generativeai.types import HarmCategory, HarmBlockThreshold
+        subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', 'google-genai'])
+        from google import genai
+        from google.genai import types
     except:
         pass
 
-try:
-    import requests
-except ImportError:
-    subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', 'requests'])
-    import requests
+
 
 try:
     import imageio
@@ -49,12 +45,7 @@ except ImportError:
 
 GEMINI_MAX_INPUT_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
-def configure(api_key):
-    if api_key is None or api_key.strip() == "":
-        api_key = os.environ.get("GEMINI_API_KEY")
-    if api_key is None or api_key.strip() == "":
-        raise Exception("Gemini API Key not found. Please provide it in the node's input or set the GEMINI_API_KEY environment variable.")
-    genai.configure(api_key=api_key)
+
 
 def to_pil(image):
     return PIL.Image.fromarray((image.cpu().numpy().squeeze() * 255).astype('uint8'))
@@ -82,39 +73,99 @@ def get_pils(image_1, image_2, image_3, image_4):
 def get_safety_settings(level):
     if level == "off":
         return [
-            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": "OFF"},
-            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": "OFF"},
-            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": "OFF"},
-            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": "OFF"},
+            types.SafetySetting(
+                category="HARM_CATEGORY_HARASSMENT",
+                threshold="BLOCK_NONE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_HATE_SPEECH",
+                threshold="BLOCK_NONE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                threshold="BLOCK_NONE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold="BLOCK_NONE",
+            ),
         ]
     if level == "minimum":
         return [
-            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_ONLY_HIGH},
-            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_ONLY_HIGH},
-            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_ONLY_HIGH},
-            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_ONLY_HIGH},
+            types.SafetySetting(
+                category="HARM_CATEGORY_HARASSMENT",
+                threshold="BLOCK_ONLY_HIGH",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_HATE_SPEECH",
+                threshold="BLOCK_ONLY_HIGH",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                threshold="BLOCK_ONLY_HIGH",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold="BLOCK_ONLY_HIGH",
+            ),
         ]
     if level == "medium":
         return [
-            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE},
-            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE},
-            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE},
-            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE},
+            types.SafetySetting(
+                category="HARM_CATEGORY_HARASSMENT",
+                threshold="BLOCK_MEDIUM_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_HATE_SPEECH",
+                threshold="BLOCK_MEDIUM_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                threshold="BLOCK_MEDIUM_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold="BLOCK_MEDIUM_AND_ABOVE",
+            ),
         ]
     if level == "maximum":
         return [
-            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE},
-            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE},
-            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE},
-            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE},
+            types.SafetySetting(
+                category="HARM_CATEGORY_HARASSMENT",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_HATE_SPEECH",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
         ]
     
-    # Default to "none" for any other case, including "none" or invalid values
+    # Default to "none" for any other case
     return [
-        {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        types.SafetySetting(
+            category="HARM_CATEGORY_HARASSMENT",
+            threshold="BLOCK_NONE",
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_HATE_SPEECH",
+            threshold="BLOCK_NONE",
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold="BLOCK_NONE",
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold="BLOCK_NONE",
+        ),
     ]
 
 class ETNodesGeminiApiImage:
@@ -153,7 +204,8 @@ class ETNodesGeminiApiImage:
         if API_key is None or API_key.strip() == "":
             raise Exception("Gemini API Key not found. Please provide it in the node's input or set the GEMINI_API_KEY environment variable.")
 
-        parts = []
+        client = genai.Client(api_key=API_key)
+
         pils = []
         if images is not None:
             if model == "gemini-3-pro-image-preview" and len(images) > 14:
@@ -167,16 +219,10 @@ class ETNodesGeminiApiImage:
         if prompt.strip() == "" and pils:
             prompt = "What is in this image? Describe it in detail."
 
-        parts = [{"text": prompt}]
-        for pil_image in pils:
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format="PNG")
-            parts.append({
-                "inlineData": {
-                    "mimeType": "image/png",
-                    "data": base64.b64encode(buffer.getvalue()).decode()
-                }
-            })
+        contents = []
+        if prompt:
+            contents.append(prompt)
+        contents.extend(pils)
 
         image_config = {}
         if aspect_ratio != "auto":
@@ -185,83 +231,65 @@ class ETNodesGeminiApiImage:
         if model == "gemini-3-pro-image-preview":
             image_config["imageSize"] = resolution
 
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {
-                "temperature": 1,
-                "topP": 0.95,
-                "topK": 64,
-                "maxOutputTokens": 32768,
-                "responseModalities": ["IMAGE"],
-            },
-            "safetySettings": get_safety_settings(safety_level)
+        # Construct configuration
+        config_dict = {
+            "temperature": 1,
+            "top_p": 0.95,
+            "top_k": 64,
+            "max_output_tokens": 32768,
+            "response_modalities": ["IMAGE"],
+            "safety_settings": get_safety_settings(safety_level),
         }
-        
+
         if search_grounding == "on":
-             payload["tools"] = [{"googleSearch": {}}]
+             if model != "gemini-2.5-flash-image":
+                 config_dict["tools"] = [{"google_search": {}}]
 
         if image_config:
-            payload["generationConfig"]["imageConfig"] = image_config
-
-        if system_prompt and system_prompt.strip():
-            payload["system_instruction"] = {
-                "parts": [{"text": system_prompt}]
-            }
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_key}"
-        headers = {"Content-Type": "application/json"}
+            config_dict["image_config"] = image_config
         
+        if system_prompt and system_prompt.strip():
+            config_dict["system_instruction"] = system_prompt
+
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload))
-            response.raise_for_status()
-            response_data = response.json()
-        except requests.exceptions.RequestException as e:
-            error_message = f"API request failed: {e}"
-            try:
-                error_details = response.json()
-                error_message += f"\nResponse: {json.dumps(error_details, indent=2)}"
-            except (ValueError, AttributeError):
-                pass
-            raise Exception(error_message)
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config_dict
+            )
+        except Exception as e:
+            raise Exception(f"API request failed: {e}")
 
-        images = []
+        images_out = []
         text_responses = []
-        if "candidates" in response_data:
-            for candidate in response_data["candidates"]:
-                if "content" in candidate and "parts" in candidate["content"]:
-                    for part in candidate["content"]["parts"]:
-                        if "inlineData" in part and part["inlineData"]["mimeType"].startswith("image/"):
-                            image_data = base64.b64decode(part["inlineData"]["data"])
-                            pil_image = PIL.Image.open(io.BytesIO(image_data))
-                            images.append(from_pil(pil_image))
-                        elif "text" in part:
-                            text_responses.append(part["text"])
 
-        if not images:
+        # Parse response
+        if response.candidates:
+            for candidate in response.candidates:
+                if hasattr(candidate, "content") and candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if part.inline_data:
+                            # Handling inline image data
+                            # part.inline_data.data should be bytes in new SDK
+                            image_data = part.inline_data.data
+                            # If it is base64 string (some versions), decode it
+                            if isinstance(image_data, str):
+                                image_data = base64.b64decode(image_data)
+                            
+                            pil_image = PIL.Image.open(io.BytesIO(image_data))
+                            images_out.append(from_pil(pil_image))
+                        elif part.text:
+                            text_responses.append(part.text)
+        
+        if not images_out:
             text_response = " ".join(text_responses)
             
-            # Check for safety feedback first
-            if "promptFeedback" in response_data and "blockReason" in response_data["promptFeedback"]:
-                reason = response_data['promptFeedback']['blockReason']
-                message = f"Request was blocked due to safety settings. Reason: {reason}"
-                if text_response:
-                    message += f". Model response: {text_response}"
-                raise Exception(message)
-
-            # Check for finishMessage in candidates
-            if "candidates" in response_data:
-                for candidate in response_data["candidates"]:
-                    if "finishMessage" in candidate and candidate.get("finishReason") == "IMAGE_SAFETY":
-                        raise Exception(f"Image generation failed due to safety settings: {candidate['finishMessage']}")
-                    if candidate.get("finishReason") == "NO_IMAGE":
-                        raise Exception("Image generation failed: The model chose not to generate an image for this prompt.")
-
             if text_response:
                 raise Exception(f"No image was generated. The model returned text instead: {text_response}")
             
-            raise Exception(f"No image was generated and no text explanation was provided. Response: {response_data}")
+            raise Exception(f"No image was generated and no text explanation was provided. Response object: {response}")
 
-        return (torch.cat(images, dim=0),)
+        return (torch.cat(images_out, dim=0),)
 
 class ETNodesGeminiApiText:
     """
@@ -298,21 +326,16 @@ class ETNodesGeminiApiText:
         if API_key is None or API_key.strip() == "":
             raise Exception("Gemini API Key not found. Please provide it in the node's input or set the GEMINI_API_KEY environment variable.")
 
-        parts = []
+        client = genai.Client(api_key=API_key)
+
+        contents = []
         if prompt and prompt.strip():
-            parts.append({"text": prompt})
+            contents.append(prompt)
 
         if images is not None:
             for image in images:
                 pil_image = to_pil(image)
-                buffer = io.BytesIO()
-                pil_image.save(buffer, format="PNG")
-                parts.append({
-                    "inlineData": {
-                        "mimeType": "image/png",
-                        "data": base64.b64encode(buffer.getvalue()).decode()
-                    }
-                })
+                contents.append(pil_image)
 
         if audio is not None:
             import wave
@@ -328,14 +351,13 @@ class ETNodesGeminiApiText:
                 wf.setsampwidth(2) # 2 bytes = 16 bits
                 wf.setframerate(sample_rate)
                 wf.writeframes(pcm_data.tobytes())
-            buffer.seek(0)
             
-            parts.append({
-                "inlineData": {
-                    "mimeType": "audio/wav",
-                    "data": base64.b64encode(buffer.read()).decode()
-                }
-            })
+            contents.append(types.Part(
+                inline_data=types.Blob(
+                    mime_type="audio/wav",
+                    data=buffer.getvalue()
+                )
+            ))
 
         if video is not None:
             video_path = video._VideoFromFile__file
@@ -351,66 +373,48 @@ class ETNodesGeminiApiText:
                         for frame in reader:
                             writer.append_data(frame)
                 
-                buffer.seek(0)
-                video_data = base64.b64encode(buffer.read()).decode('utf-8')
-                
-                parts.append({
-                    "inlineData": {
-                        "mimeType": "video/mp4",
-                        "data": video_data
-                    }
-                })
+                contents.append(types.Part(
+                    inline_data=types.Blob(
+                        mime_type="video/mp4",
+                        data=buffer.getvalue()
+                    )
+                ))
 
-        if not parts:
+        if not contents:
             raise Exception("At least one input (prompt, image, audio, or video) is required.")
 
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {
-                "temperature": 1,
-                "topP": 0.95,
-                "topK": 64,
-                "maxOutputTokens": 32768,
-            },
-            "safetySettings": get_safety_settings(safety_level)
+        config_dict = {
+            "temperature": 1,
+            "top_p": 0.95,
+            "top_k": 64,
+            "max_output_tokens": 32768,
+            "safety_settings": get_safety_settings(safety_level),
+            "system_instruction": system_prompt if system_prompt and system_prompt.strip() else None,
         }
 
         if search_grounding == "on":
-            payload["tools"] = [{"googleSearch": {}}]
-
-        if system_prompt and system_prompt.strip():
-            payload["system_instruction"] = {
-                "parts": [{"text": system_prompt}]
-            }
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_key}"
-        headers = {"Content-Type": "application/json"}
+            config_dict["tools"] = [{"google_search": {}}]
 
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload))
-            response.raise_for_status()
-            response_data = response.json()
-        except requests.exceptions.RequestException as e:
-            error_message = f"API request failed: {e}"
-            try:
-                error_details = response.json()
-                error_message += f"\\nResponse: {json.dumps(error_details, indent=2)}"
-            except (ValueError, AttributeError):
-                pass
-            raise Exception(error_message)
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config_dict
+            )
+        except Exception as e:
+            raise Exception(f"API request failed: {e}")
 
         text_responses = []
-        if "candidates" in response_data:
-            for candidate in response_data["candidates"]:
-                if "content" in candidate:
-                    for part in candidate["content"]["parts"]:
-                        if "text" in part:
-                            text_responses.append(part["text"])
+        if response.candidates:
+            for candidate in response.candidates:
+                if hasattr(candidate, "content") and candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if part.text:
+                            text_responses.append(part.text)
 
         if not text_responses:
-            if "promptFeedback" in response_data and "blockReason" in response_data["promptFeedback"]:
-                raise Exception(f"Request was blocked due to safety settings. Reason: {response_data['promptFeedback']['blockReason']}")
-            raise Exception(f"The model returned no text. Response: {response_data}")
+            # Simple error reporting
+            raise Exception(f"The model returned no text. Response object: {response}")
 
         return (" ".join(text_responses),)
 
