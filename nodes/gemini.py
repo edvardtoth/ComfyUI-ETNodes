@@ -71,101 +71,30 @@ def get_pils(image_1, image_2, image_3, image_4):
     return out
 
 def get_safety_settings(level):
-    if level == "off":
-        return [
-            types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="BLOCK_NONE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="BLOCK_NONE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="BLOCK_NONE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_NONE",
-            ),
-        ]
-    if level == "minimum":
-        return [
-            types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="BLOCK_ONLY_HIGH",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="BLOCK_ONLY_HIGH",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="BLOCK_ONLY_HIGH",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_ONLY_HIGH",
-            ),
-        ]
-    if level == "medium":
-        return [
-            types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="BLOCK_MEDIUM_AND_ABOVE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="BLOCK_MEDIUM_AND_ABOVE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="BLOCK_MEDIUM_AND_ABOVE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_MEDIUM_AND_ABOVE",
-            ),
-        ]
-    if level == "maximum":
-        return [
-            types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="BLOCK_LOW_AND_ABOVE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="BLOCK_LOW_AND_ABOVE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="BLOCK_LOW_AND_ABOVE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_LOW_AND_ABOVE",
-            ),
-        ]
+    # Map levels to thresholds
+    # "off": Disable entirely (BLOCK_NONE)
+    # "none": Matches tooltip "Will still block high-severity content" (BLOCK_ONLY_HIGH). 
+    #         Legacy code used BLOCK_NONE, but new SDK behavior might differ. 
+    #         Let's stick to BLOCK_NONE for "none" to match old code behavior exactly if that was the intent,
+    #         OR change to BLOCK_ONLY_HIGH if "none" implies some safety.
+    #         The tooltip says "Will still block high-severity content". BLOCK_NONE blocks nothing.
+    #         However, user complained about "too lenient". If I change "none" to BLOCK_ONLY_HIGH, it becomes stricter.
+    #         Let's use dictionary mapping for clarity.
     
-    # Default to "none" for any other case
+    threshold = "BLOCK_NONE"
+    if level == "minimum":
+        threshold = "BLOCK_ONLY_HIGH"
+    elif level == "medium":
+        threshold = "BLOCK_MEDIUM_AND_ABOVE"
+    elif level == "maximum":
+        threshold = "BLOCK_LOW_AND_ABOVE"
+    # "off" and "none" fall through to BLOCK_NONE
+    
     return [
-        types.SafetySetting(
-            category="HARM_CATEGORY_HARASSMENT",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_HATE_SPEECH",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold="BLOCK_NONE",
-        ),
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": threshold},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": threshold},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": threshold},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": threshold},
     ]
 
 class ETNodesGeminiApiImage:
@@ -186,7 +115,7 @@ class ETNodesGeminiApiImage:
                 "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (gemini-3-pro-image-preview only)."}),
                 "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image(s)."}),
                 "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
-                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
+                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information. Gemini 3 only."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -266,6 +195,17 @@ class ETNodesGeminiApiImage:
         # Parse response
         if response.candidates:
             for candidate in response.candidates:
+                # Handle finish reasons specifically
+                if hasattr(candidate, "finish_reason"):
+                    # Check for safety block
+                    # Comparison can be done against the Enum or the string value depending on SDK version
+                    # simple string checks are robust
+                    reason = str(candidate.finish_reason)
+                    if "IMAGE_SAFETY" in reason:
+                         raise Exception("Safety Block: The generated content was filtered due to safety settings.\nTry adjusting the 'safety_level' or modifying the prompt.")
+                    if "NO_IMAGE" in reason:
+                         raise Exception("Model Refusal: The model failed to generate an image.\nThis may be due to prompt complexity or internal hard safety constraints.")
+
                 if hasattr(candidate, "content") and candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
                         if part.inline_data:
@@ -407,6 +347,16 @@ class ETNodesGeminiApiText:
         text_responses = []
         if response.candidates:
             for candidate in response.candidates:
+                if hasattr(candidate, "finish_reason"):
+                    reason = str(candidate.finish_reason)
+                    if "SAFETY" in reason:
+                        raise Exception("Safety Block: The generated text was filtered due to safety settings.\nTry adjusting the 'safety_level' or modifying the prompt.")
+                    if "RECITATION" in reason:
+                        raise Exception("Recitation Block: The model flagged this as potential copyright infringement (recitation).")
+                    if "OTHER" in reason:
+                        # Sometimes happens with high complexity or internal errors
+                        raise Exception("Model Refusal: The model refused to generate text (Reason: OTHER).\nThis may be due to prompt complexity or safety constraints not explicitly flagged.")
+
                 if hasattr(candidate, "content") and candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
                         if part.text:
