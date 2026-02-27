@@ -24,12 +24,17 @@ except:
     except:
         pass
 
+SUPPORT_THINKING_LEVEL = False
 try:
     from google import genai
     from google.genai import types
+    # Check if the installed google-genai version supports thinking_level
+    # If not, this throws an exception to trigger the pip upgrade below
+    _ = types.ThinkingConfig(thinking_level="HIGH")
+    SUPPORT_THINKING_LEVEL = True
 except:
     try:
-        subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', 'google-genai'])
+        subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', '-U', 'google-genai'])
         from google import genai
         from google.genai import types
     except:
@@ -104,11 +109,14 @@ class ETNodesGeminiApiImage:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt to generate an image from."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3-pro-image-preview", "gemini-2.5-flash-image"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing."}),
-                "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (gemini-3-pro-image-preview only)."}),
-                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", ], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe 'auto' setting will match the aspect ratio of the input image(s)."}),
-                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
-                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information. Gemini 3 only."}),
+                "model": (["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing.\nNano Banana Pro --> gemini-3-pro-image-preview\nNano Banana 2 --> gemini-3.1-flash-image-preview\nNano Banana --> gemini-2.5-flash-image"}),
+                "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (Gemini 3 models only)."}),
+                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe AUTO setting will match the aspect ratio of the input image(s).\nThe 1:4, 4:1, 1:8 and 8:1 ratios will only work with the 3.1 Flash model."}),
+                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNONE - Will still block high-severity content.\nOFF - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
+                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information.\nGemini 3 only."}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "tooltip": "ADVANCED SETTING.\nAdjusts visual variety and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
+                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "ADVANCED SETTING.\nControls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
+                "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "tooltip": "ADVANCED SETTING.\nLimits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -120,7 +128,7 @@ class ETNodesGeminiApiImage:
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "execute"
     
-    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, aspect_ratio, resolution, seed, API_key=None, images=None):
+    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, aspect_ratio, resolution, temperature, top_p, top_k, seed, API_key=None, images=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -147,20 +155,33 @@ class ETNodesGeminiApiImage:
         contents.extend(pils)
 
         image_config = None
-        if aspect_ratio != "auto" or model == "gemini-3-pro-image-preview":
+        if aspect_ratio != "auto" or "gemini-3" in model:
             img_conf_params = {}
             if aspect_ratio != "auto":
-                img_conf_params["aspect_ratio"] = aspect_ratio
-            if model == "gemini-3-pro-image-preview":
+                final_aspect_ratio = aspect_ratio
+                if model != "gemini-3.1-flash-image-preview":
+                    # Fallback mapping for models that don't support the new aspect ratios
+                    ratio_fallback = {
+                        "1:4": "2:3",
+                        "4:1": "3:2",
+                        "1:8": "9:16",
+                        "8:1": "16:9"
+                    }
+                    if aspect_ratio in ratio_fallback:
+                        final_aspect_ratio = ratio_fallback[aspect_ratio]
+                        
+                img_conf_params["aspect_ratio"] = final_aspect_ratio
+
+            if "gemini-3" in model:
                  img_conf_params["image_size"] = resolution
             # Use dict instead of types.ImageConfig to avoid version compatibility issues
             image_config = img_conf_params
 
         # Construct configuration using types
         config = types.GenerateContentConfig(
-            temperature=1,
-            top_p=0.95,
-            top_k=64,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
             max_output_tokens=32768,
             response_modalities=["IMAGE"],
             safety_settings=get_safety_settings(safety_level),
@@ -236,9 +257,13 @@ class ETNodesGeminiApiText:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt for the model."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"], {"default": "gemini-3-pro-preview", "tooltip": "The model to use for input file analysis and text generation."}),
-                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\n'none' - Will still block high-severity content.\n'off' - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
+                "model": (["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"], {"default": "gemini-3.1-pro-preview", "tooltip": "The model to use for input file analysis and text generation."}),
+                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNONE - Will still block high-severity content.\nOFF - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
+                "thinking_level": (["high", "medium", "low"], {"default": "high", "tooltip": "Determine the reasoning depth for Gemini 3 models.\nDefault is HIGH for maximum reasoning."}),
                 "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "tooltip": "ADVANCED SETTING.\nControls creative flair and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
+                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "ADVANCED SETTING.\nControls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
+                "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "tooltip": "ADVANCED SETTING.\nLimits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -252,7 +277,7 @@ class ETNodesGeminiApiText:
     RETURN_TYPES = ("STRING",)
     FUNCTION = "execute"
 
-    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, seed, API_key=None, images=None, audio=None, video=None):
+    def execute(self, prompt, system_prompt, model, safety_level, thinking_level, search_grounding, temperature, top_p, top_k, seed, API_key=None, images=None, audio=None, video=None):
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -316,13 +341,19 @@ class ETNodesGeminiApiText:
             raise Exception("At least one input (prompt, image, audio, or video) is required.")
 
         config_dict = {
-            "temperature": 1,
-            "top_p": 0.95,
-            "top_k": 64,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
             "max_output_tokens": 32768,
             "safety_settings": get_safety_settings(safety_level),
             "system_instruction": system_prompt if system_prompt and system_prompt.strip() else None,
         }
+
+        if model in ["gemini-3.1-pro-preview", "gemini-3-flash-preview"]:
+            if SUPPORT_THINKING_LEVEL:
+                config_dict["thinking_config"] = {"thinking_level": thinking_level.upper()}
+            else:
+                print(f"ETNodes Warning: Ignored thinking_level '{thinking_level}' because the current google-genai package loaded in memory does not support it. Please restart ComfyUI to apply the pending SDK update.")
 
         if search_grounding == "on":
             config_dict["tools"] = [{"google_search": {}}]
