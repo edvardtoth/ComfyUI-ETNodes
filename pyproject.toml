@@ -14,7 +14,12 @@ license = {text = "MIT license"}
 requires-python = ">=3.10"
 classifiers = []
 dependencies = [
-
+  "google-genai>=2.6.0",
+  "Pillow",
+  "imageio",
+  "imageio-ffmpeg",
+  "torch",
+  "numpy",
 ]
 
 
@@ -70,7 +75,7 @@ disable_error_code = "attr-defined"
 [tool.ruff]
 # extend-exclude = ["static", "ci/templates"]
 line-length = 140
-src = ["src", "tests"]
+src = ["nodes", "tests"]
 target-version = "py39"
 
 # Add rules to ban exec/eval
@@ -85,3 +90,6 @@ select = [
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
+
+[tool.pyrefly]
+python-interpreter-path = "d:\\StabilityMatrix\\Packages\\ComfyUI\\venv\\Scripts\\python.exe"

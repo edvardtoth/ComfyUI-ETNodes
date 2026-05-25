@@ -2,53 +2,21 @@
 
 import torch
 import os
-import sys
-import subprocess
 import io
 import numpy as np
 import random
-
 import base64
-import folder_paths
+from typing import Any
 
-try:
-    import PIL
-    import PIL.Image
-    import PIL.ImageOps
-except:
-    try:
-        subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', 'Pillow'])
-        import PIL
-        import PIL.Image
-        import PIL.ImageOps
-    except:
-        pass
+import PIL.Image
+import PIL.ImageOps
+import imageio
+from google import genai
+from google.genai import types
 
-SUPPORT_THINKING_LEVEL = False
-try:
-    from google import genai
-    from google.genai import types
-    # Check if the installed google-genai version supports thinking_level
-    # If not, this throws an exception to trigger the pip upgrade below
-    _ = types.ThinkingConfig(thinking_level="HIGH")
-    SUPPORT_THINKING_LEVEL = True
-except:
-    try:
-        subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', '-U', 'google-genai'])
-        from google import genai
-        from google.genai import types
-    except:
-        pass
-
-
-
-try:
-    import imageio
-except ImportError:
-    subprocess.check_call([sys.executable, '-m', 'pip', '-q', 'install', 'imageio', 'imageio-ffmpeg'])
-    import imageio
-
+SUPPORT_THINKING_LEVEL = True
 GEMINI_MAX_INPUT_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
 
 
 
@@ -56,7 +24,7 @@ def to_pil(image):
     return PIL.Image.fromarray((image.cpu().numpy().squeeze() * 255).astype('uint8'))
 
 def from_pil(image):
-    out = torch.from_numpy(np.array(image)).float().div(255.0)
+    out = torch.from_numpy(np.array(image)).float().div(255.0)  # type: ignore
     if len(out.shape) == 2:
         out = out.unsqueeze(2).expand(-1, -1, 3)
     else:
@@ -75,25 +43,31 @@ def get_pils(image_1, image_2, image_3, image_4):
         out.append(to_pil(image_4))
     return out
 
-def get_safety_settings(level):
+def get_safety_settings(level) -> list[Any]:
     
     threshold = "BLOCK_NONE"
-    if level == "off":
-        threshold = "OFF"
-    elif level == "minimum":
+    if level == "minimum":
         threshold = "BLOCK_ONLY_HIGH"
     elif level == "medium":
         threshold = "BLOCK_MEDIUM_AND_ABOVE"
     elif level == "maximum":
         threshold = "BLOCK_LOW_AND_ABOVE"
-    # "none" falls through to BLOCK_NONE
+    # "none" and "off" (legacy) fall through to BLOCK_NONE
     
-    return [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": threshold},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": threshold},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": threshold},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": threshold},
-    ]
+    try:
+        return [
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=threshold),  # type: ignore
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=threshold),  # type: ignore
+            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=threshold),  # type: ignore
+            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=threshold),  # type: ignore
+        ]
+    except Exception:
+        return [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": threshold},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": threshold},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": threshold},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": threshold},
+        ]
 
 class ETNodesGeminiApiImage:
     """
@@ -104,24 +78,24 @@ class ETNodesGeminiApiImage:
     CATEGORY = "ETNodes"
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt to generate an image from."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing.\nNano Banana Pro --> gemini-3-pro-image-preview\nNano Banana 2 --> gemini-3.1-flash-image-preview\nNano Banana --> gemini-2.5-flash-image"}),
+                "model": (["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing.\nNano Banana Pro --> gemini-3-pro-image-preview\nNano Banana 2 --> gemini-3.1-flash-image-preview"}),
                 "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (Gemini 3 models only)."}),
-                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe AUTO setting will match the aspect ratio of the input image(s).\nThe 1:4, 4:1, 1:8 and 8:1 ratios will only work with the 3.1 Flash model."}),
-                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNONE - Will still block high-severity content.\nOFF - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
-                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information.\nGemini 3 only."}),
-                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "tooltip": "ADVANCED SETTING.\nAdjusts visual variety and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
-                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "ADVANCED SETTING.\nControls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
-                "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "tooltip": "ADVANCED SETTING.\nLimits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
+                "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe AUTO setting will match the aspect ratio of the input image(s)."}),
+                "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "advanced": True, "tooltip": "The safety level for content moderation.\nNONE - Will disable probability-based safety filters for harassment, hate speech, sexual content, and dangerous content (some core protections cannot be disabled)."}),
+                "search_grounding": (["off", "on"], {"default": "off", "advanced": True, "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "advanced": True, "tooltip": "Adjusts visual variety and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
+                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "advanced": True, "tooltip": "Controls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
+                "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "advanced": True, "tooltip": "Limits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
                 "API_key": ("STRING", {"multiline": False, "default": "","tooltip": "Your Gemini API key.\n\nAdd the API key to a GEMINI_API_KEY environment variable\nand leave this field blank for more convenience and security."}),
-                "images": ("IMAGE", {"tooltip": "Optional batch of input images.\nUp to 14 images for gemini-3-pro-image-preview.\nUp to 4 images for gemini-2.5-flash-image."}),
+                "images": ("IMAGE", {"tooltip": "Optional batch of input images.\nUp to 14 images for gemini-3-pro-image-preview."}),
             }
         }
 
@@ -129,6 +103,10 @@ class ETNodesGeminiApiImage:
     FUNCTION = "execute"
     
     def execute(self, prompt, system_prompt, model, safety_level, search_grounding, aspect_ratio, resolution, temperature, top_p, top_k, seed, API_key=None, images=None):
+        # Map legacy 2.5 models to prevent breaking existing workflows
+        if model == "gemini-2.5-flash-image":
+            model = "gemini-3-pro-image-preview"
+
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -159,7 +137,7 @@ class ETNodesGeminiApiImage:
             img_conf_params = {}
             if aspect_ratio != "auto":
                 final_aspect_ratio = aspect_ratio
-                if model != "gemini-3.1-flash-image-preview":
+                if model == "gemini-3-pro-image-preview":
                     # Fallback mapping for models that don't support the new aspect ratios
                     ratio_fallback = {
                         "1:4": "2:3",
@@ -169,7 +147,6 @@ class ETNodesGeminiApiImage:
                     }
                     if aspect_ratio in ratio_fallback:
                         final_aspect_ratio = ratio_fallback[aspect_ratio]
-                        
                 img_conf_params["aspect_ratio"] = final_aspect_ratio
 
             if "gemini-3" in model:
@@ -185,13 +162,12 @@ class ETNodesGeminiApiImage:
             max_output_tokens=32768,
             response_modalities=["IMAGE"],
             safety_settings=get_safety_settings(safety_level),
-            image_config=image_config,
+            image_config=image_config,  # type: ignore
             system_instruction=system_prompt if system_prompt and system_prompt.strip() else None
         )
 
         if search_grounding == "on":
-             if model != "gemini-2.5-flash-image":
-                 config.tools = [{"google_search": {}}]
+             config.tools = [{"google_search": {}}]  # type: ignore
 
         try:
             response = client.models.generate_content(
@@ -225,12 +201,13 @@ class ETNodesGeminiApiImage:
                             # Handling inline image data
                             # part.inline_data.data should be bytes in new SDK
                             image_data = part.inline_data.data
-                            # If it is base64 string (some versions), decode it
-                            if isinstance(image_data, str):
-                                image_data = base64.b64decode(image_data)
-                            
-                            pil_image = PIL.Image.open(io.BytesIO(image_data))
-                            images_out.append(from_pil(pil_image))
+                            if image_data is not None:
+                                # If it is base64 string (some versions), decode it
+                                if isinstance(image_data, str):
+                                    image_data = base64.b64decode(image_data)
+                                
+                                pil_image = PIL.Image.open(io.BytesIO(image_data))
+                                images_out.append(from_pil(pil_image))
                         elif part.text:
                             text_responses.append(part.text)
         
@@ -242,7 +219,7 @@ class ETNodesGeminiApiImage:
             
             raise Exception(f"No image was generated and no text explanation was provided. Response object: {response}")
 
-        return (torch.cat(images_out, dim=0),)
+        return (torch.cat(images_out, dim=0),)  # type: ignore
 
 class ETNodesGeminiApiText:
     """
@@ -252,18 +229,18 @@ class ETNodesGeminiApiText:
     CATEGORY = "ETNodes"
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt for the model."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"], {"default": "gemini-3.1-pro-preview", "tooltip": "The model to use for input file analysis and text generation."}),
-                "safety_level": (["off", "none", "minimum", "medium", "maximum"], {"default": "none", "tooltip": "The safety level for content moderation.\nNONE - Will still block high-severity content.\nOFF - A new experimental API feature to disable all safety filters. May revert to 'none'."}),
-                "thinking_level": (["high", "medium", "low"], {"default": "high", "tooltip": "Determine the reasoning depth for Gemini 3 models.\nDefault is HIGH for maximum reasoning."}),
-                "search_grounding": (["off", "on"], {"default": "off", "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
-                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "tooltip": "ADVANCED SETTING.\nControls creative flair and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
-                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "ADVANCED SETTING.\nControls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
-                "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "tooltip": "ADVANCED SETTING.\nLimits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
+                "model": (["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite"], {"default": "gemini-3.5-flash", "tooltip": "The model to use for input file analysis and text generation."}),
+                "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "advanced": True, "tooltip": "The safety level for content moderation.\nNONE - Will disable probability-based safety filters for harassment, hate speech, sexual content, and dangerous content (some core protections cannot be disabled)."}),
+                "thinking_level": (["high", "medium", "low"], {"default": "high", "advanced": True, "tooltip": "Determine the reasoning depth for Gemini 3 and 3.5 models.\nDefault is HIGH for maximum reasoning."}),
+                "search_grounding": (["off", "on"], {"default": "off", "advanced": True, "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "advanced": True, "tooltip": "Controls creative flair and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
+                "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "advanced": True, "tooltip": "Controls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
+                "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "advanced": True, "tooltip": "Limits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -278,6 +255,14 @@ class ETNodesGeminiApiText:
     FUNCTION = "execute"
 
     def execute(self, prompt, system_prompt, model, safety_level, thinking_level, search_grounding, temperature, top_p, top_k, seed, API_key=None, images=None, audio=None, video=None):
+        # Map legacy models to prevent breaking existing workflows
+        if model == "gemini-2.5-flash":
+            model = "gemini-3.5-flash"
+        elif model == "gemini-3-flash-lite":
+            model = "gemini-3.1-flash-lite"
+        elif model in ["gemini-2.5-pro", "gemini-3.5-pro-preview"]:
+            model = "gemini-3.1-pro-preview"
+
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
         if API_key is None or API_key.strip() == "":
@@ -296,11 +281,23 @@ class ETNodesGeminiApiText:
 
         if audio is not None:
             import wave
-            waveform = audio['waveform']
-            sample_rate = audio['sample_rate']
+            waveform = audio.get('waveform')
+            sample_rate = audio.get('sample_rate')
+
+            if waveform is None or sample_rate is None:
+                raise Exception("Invalid audio input. Must contain 'waveform' and 'sample_rate'.")
             
-            # Convert float tensor to 16-bit PCM, taking the first channel
-            pcm_data = (waveform[0][0].cpu().numpy() * 32767).astype(np.int16)
+            # Check waveform shape dimensions
+            shape = waveform.shape
+            if len(shape) < 3:
+                raise Exception(f"Invalid audio waveform shape: {shape}. Expected [batch, channels, samples].")
+            
+            # Convert float tensor to 16-bit PCM, taking the first channel of the first batch
+            float_data = waveform[0][0].cpu().numpy()
+            
+            # Clip float audio values to prevent integer overflow distortion
+            float_data = np.clip(float_data, -1.0, 1.0)
+            pcm_data = (float_data * 32767.0).astype(np.int16)
             
             buffer = io.BytesIO()
             with wave.open(buffer, 'wb') as wf:
@@ -317,52 +314,70 @@ class ETNodesGeminiApiText:
             ))
 
         if video is not None:
-            video_path = video._VideoFromFile__file
-            if os.path.exists(video_path):
-                if os.path.getsize(video_path) > GEMINI_MAX_INPUT_FILE_SIZE:
-                    raise Exception(f"Video file size exceeds the 20MB limit for the Gemini API.")
-                
-                # Re-encode the video to a standard format (MP4, H.264) in memory
-                with imageio.get_reader(video_path) as reader:
-                    fps = reader.get_meta_data().get('fps', 30)
-                    buffer = io.BytesIO()
-                    with imageio.get_writer(buffer, format='mp4', mode='I', fps=fps) as writer:
-                        for frame in reader:
-                            writer.append_data(frame)
-                
-                contents.append(types.Part(
-                    inline_data=types.Blob(
-                        mime_type="video/mp4",
-                        data=buffer.getvalue()
-                    )
-                ))
+            # Video can be a string filepath, a dict, or a custom class/object
+            video_path = None
+            if isinstance(video, str):
+                video_path = video
+            elif isinstance(video, dict):
+                video_path = video.get("video") or video.get("path") or video.get("filename")
+            else:
+                # Try getting the filepath from known properties/methods or fallback to name mangling
+                video_path = (
+                    getattr(video, "video", None) or 
+                    getattr(video, "path", None) or 
+                    getattr(video, "filename", None) or 
+                    getattr(video, "_VideoFromFile__file", None)
+                )
+
+            if not video_path or not isinstance(video_path, str) or not os.path.exists(video_path):
+                raise Exception(f"Failed to find or access video file from input: {video}")
+
+            if os.path.getsize(video_path) > GEMINI_MAX_INPUT_FILE_SIZE:
+                raise Exception(f"Video file size exceeds the 20MB limit for the Gemini API.")
+            
+            from typing import Any
+            # Re-encode the video to a standard format (MP4, H.264) in memory
+            reader: Any = imageio.get_reader(video_path)
+            with reader:
+                fps = reader.get_meta_data().get('fps', 30)
+                buffer = io.BytesIO()
+                writer: Any = imageio.get_writer(buffer, format='mp4', mode='I', fps=fps)  # type: ignore
+                with writer:
+                    for frame in reader:
+                        writer.append_data(frame)
+            
+            contents.append(types.Part(
+                inline_data=types.Blob(
+                    mime_type="video/mp4",
+                    data=buffer.getvalue()
+                )
+            ))
 
         if not contents:
             raise Exception("At least one input (prompt, image, audio, or video) is required.")
 
-        config_dict = {
-            "temperature": temperature,
-            "top_p": top_p,
-            "top_k": top_k,
-            "max_output_tokens": 32768,
-            "safety_settings": get_safety_settings(safety_level),
-            "system_instruction": system_prompt if system_prompt and system_prompt.strip() else None,
-        }
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            max_output_tokens=32768,
+            safety_settings=get_safety_settings(safety_level),
+            system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
+        )
 
-        if model in ["gemini-3.1-pro-preview", "gemini-3-flash-preview"]:
-            if SUPPORT_THINKING_LEVEL:
-                config_dict["thinking_config"] = {"thinking_level": thinking_level.upper()}
-            else:
-                print(f"ETNodes Warning: Ignored thinking_level '{thinking_level}' because the current google-genai package loaded in memory does not support it. Please restart ComfyUI to apply the pending SDK update.")
+        if SUPPORT_THINKING_LEVEL:
+            setattr(config, "thinking_config", types.ThinkingConfig(thinking_level=thinking_level.upper())) # type: ignore
+        else:
+            print(f"ETNodes Warning: Ignored thinking_level '{thinking_level}' because the current google-genai package loaded in memory does not support it. Please restart ComfyUI to apply the pending SDK update.")
 
         if search_grounding == "on":
-            config_dict["tools"] = [{"google_search": {}}]
+            config.tools = [{"google_search": {}}]  # type: ignore
 
         try:
             response = client.models.generate_content(
                 model=model,
                 contents=contents,
-                config=config_dict
+                config=config
             )
         except Exception as e:
             raise Exception(f"API request failed: {e}")

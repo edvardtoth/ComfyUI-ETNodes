@@ -56,3 +56,61 @@ app.registerExtension({
         }
     },
 });
+
+app.registerExtension({
+    name: "ETNodes.utils.NodeColors",
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData.name === "ETNodes-Gemini-API-Text" || nodeData.name === "ETNodes-Gemini-API-Image") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+                this.color = "#ae1016";
+                this.bgcolor = "#1c1112";
+                return r;
+            };
+        }
+    },
+});
+
+app.registerExtension({
+    name: "ETNodes.GeminiImage.AspectRatios",
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData.name === "ETNodes-Gemini-API-Image") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+                
+                const modelWidget = this.widgets.find(w => w.name === "model");
+                const ratioWidget = this.widgets.find(w => w.name === "aspect_ratio");
+                
+                if (modelWidget && ratioWidget) {
+                    const updateRatios = () => {
+                        const isFlash = modelWidget.value === "gemini-3.1-flash-image-preview";
+                        const allRatios = ["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"];
+                        const proRatios = ["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9"];
+                        
+                        const newRatios = isFlash ? allRatios : proRatios;
+                        ratioWidget.options.values = newRatios;
+                        
+                        if (!newRatios.includes(ratioWidget.value)) {
+                            ratioWidget.value = "auto";
+                        }
+                    };
+                    
+                    const originalCallback = modelWidget.callback;
+                    modelWidget.callback = function (value) {
+                        const res = originalCallback ? originalCallback.apply(this, arguments) : undefined;
+                        updateRatios();
+                        return res;
+                    };
+                    
+                    setTimeout(updateRatios, 1);
+                }
+                
+                return r;
+            };
+        }
+    }
+});
+
+
