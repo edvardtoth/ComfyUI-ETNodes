@@ -825,73 +825,6 @@ def extract_audio_from_mp4(mp4_path: str) -> dict | None:
                 pass
 
 
-def strip_audio_from_mp4(mp4_path: str) -> str:
-    import subprocess
-    import imageio_ffmpeg
-
-    output_path = mp4_path + ".silent.mp4"
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-    cmd = [
-        ffmpeg_exe,
-        "-y",
-        "-i", mp4_path,
-        "-c:v", "copy",
-        "-an",
-        output_path
-    ]
-
-    try:
-        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        if os.path.exists(output_path):
-            os.replace(output_path, mp4_path)
-    except Exception as e:
-        print(f"ETNodes Warning: Failed to strip audio from MP4: {e}")
-    return mp4_path
-
-
-def scale_mp4(mp4_path: str, resolution: str, aspect_ratio: str) -> str:
-    height = 720
-    if resolution == "1080p":
-        height = 1080
-    elif resolution == "4K":
-        height = 2160
-    else:
-        return mp4_path
-
-    if aspect_ratio == "9:16":
-        width = int(height * 9 / 16)
-    else:
-        width = int(height * 16 / 9)
-
-    width = (width // 2) * 2
-    height = (height // 2) * 2
-
-    import subprocess
-    import imageio_ffmpeg
-
-    output_path = mp4_path + f".{resolution}.mp4"
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-    cmd = [
-        ffmpeg_exe,
-        "-y",
-        "-i", mp4_path,
-        "-vf", f"scale={width}:{height}",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
-        output_path
-    ]
-
-    try:
-        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        if os.path.exists(output_path):
-            os.replace(output_path, mp4_path)
-    except Exception as e:
-        print(f"ETNodes Warning: Failed to scale MP4: {e}")
-    return mp4_path
-
 
 class ETNodesGeminiApiVideo:
     """
@@ -1015,8 +948,12 @@ class ETNodesGeminiApiVideo:
         }
         response_format = {
             "type": "video",
-            "aspect_ratio": aspect_ratio
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution
         }
+        modalities = ["video"]
+        if generate_audio == "on":
+            modalities.append("audio")
 
         try:
             interaction = client.interactions.create(
@@ -1025,7 +962,8 @@ class ETNodesGeminiApiVideo:
                 previous_interaction_id=new_interaction_id,
                 system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
                 generation_config=gen_config,
-                response_format=response_format
+                response_format=response_format,
+                response_modalities=modalities
             )
 
             if not hasattr(interaction, "output_video") or not interaction.output_video:
@@ -1050,13 +988,7 @@ class ETNodesGeminiApiVideo:
             temp_mp4_path = temp_mp4.name
 
         try:
-            # 1. Scale video if resolution is 1080p or 4K
-            if resolution in ["1080p", "4K"]:
-                scale_mp4(temp_mp4_path, resolution, aspect_ratio)
 
-            # 2. Strip audio if generate_audio is off
-            if generate_audio == "off":
-                strip_audio_from_mp4(temp_mp4_path)
 
             frames_tensor = load_video_frames(temp_mp4_path)
 
