@@ -878,6 +878,8 @@ class ETNodesGeminiApiVideo:
             if closest_duration != duration_seconds:
                 print(f"ETNodes Warning: Veo models only support durations of 4, 6, or 8 seconds. Adjusted {duration_seconds}s to {closest_duration}s.")
             duration_seconds = closest_duration
+            if generate_audio == "on":
+                print("ETNodes Warning: Audio generation for Veo models is only supported in Gemini Enterprise Agent Platform mode. Omitted audio generation.")
         elif "omni" in model:
             if duration_seconds > 10:
                 print(f"ETNodes Warning: Gemini Omni Flash preview supports a maximum duration of 10 seconds. Clamped to 10s.")
@@ -1014,7 +1016,6 @@ class ETNodesGeminiApiVideo:
                 aspect_ratio=aspect_ratio,
                 duration_seconds=duration_seconds,
                 resolution=resolution,
-                generate_audio=(generate_audio == "on"),
                 person_generation="allow_adult",
                 negative_prompt=negative_prompt if negative_prompt and negative_prompt.strip() else None,
                 last_frame=last_frame_ref if last_frame_ref else None,
