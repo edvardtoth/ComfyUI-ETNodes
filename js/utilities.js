@@ -203,8 +203,7 @@ app.registerExtension({
 
                         // 3. Aspect Ratio constraints
                         if (ratioWidget) {
-                            const isOmni = modelValue.includes("omni");
-                            const allowedRatios = isOmni ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"];
+                            const allowedRatios = ["16:9", "9:16"];
                             
                             ratioWidget.options.values = allowedRatios;
                             if (!allowedRatios.includes(ratioWidget.value)) {
