@@ -825,6 +825,74 @@ def extract_audio_from_mp4(mp4_path: str) -> dict | None:
                 pass
 
 
+def strip_audio_from_mp4(mp4_path: str) -> str:
+    import subprocess
+    import imageio_ffmpeg
+
+    output_path = mp4_path + ".silent.mp4"
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i", mp4_path,
+        "-c:v", "copy",
+        "-an",
+        output_path
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        if os.path.exists(output_path):
+            os.replace(output_path, mp4_path)
+    except Exception as e:
+        print(f"ETNodes Warning: Failed to strip audio from MP4: {e}")
+    return mp4_path
+
+
+def scale_mp4(mp4_path: str, resolution: str, aspect_ratio: str) -> str:
+    height = 720
+    if resolution == "1080p":
+        height = 1080
+    elif resolution == "4K":
+        height = 2160
+    else:
+        return mp4_path
+
+    if aspect_ratio == "9:16":
+        width = int(height * 9 / 16)
+    else:
+        width = int(height * 16 / 9)
+
+    width = (width // 2) * 2
+    height = (height // 2) * 2
+
+    import subprocess
+    import imageio_ffmpeg
+
+    output_path = mp4_path + f".{resolution}.mp4"
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i", mp4_path,
+        "-vf", f"scale={width}:{height}",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        output_path
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        if os.path.exists(output_path):
+            os.replace(output_path, mp4_path)
+    except Exception as e:
+        print(f"ETNodes Warning: Failed to scale MP4: {e}")
+    return mp4_path
+
+
 class ETNodesGeminiApiVideo:
     """
     A node to generate and edit videos using the Google Gemini Omni model, supporting agentic multi-turn conversational video editing.
@@ -837,16 +905,17 @@ class ETNodesGeminiApiVideo:
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt describing the video or edit."}),
+                "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system instruction to guide model behavior."}),
+                "model": (["gemini-omni-flash-preview"], {"default": "gemini-omni-flash-preview", "tooltip": "The video generation model to use."}),
+                "resolution": (["720p", "1080p", "4K"], {"default": "720p", "tooltip": "The output video resolution."}),
                 "aspect_ratio": (["16:9", "9:16"], {"default": "16:9", "tooltip": "The aspect ratio of the generated video."}),
                 "duration_seconds": ("INT", {"default": 4, "min": 1, "max": 10, "step": 1, "tooltip": "The length of the generated video clip in seconds."}),
-                "resolution": (["720p", "1080p", "4K"], {"default": "720p", "tooltip": "The output resolution for the video."}),
                 "generate_audio": (["on", "off"], {"default": "on", "tooltip": "Generate synchronized background audio/dialogue."}),
                 "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "advanced": True, "tooltip": "The safety level for content filtering."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
                 "API_key": ("STRING", {"multiline": False, "default": "", "tooltip": "Your Gemini API key."}),
-                "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system instruction to guide model behavior."}),
                 "image": ("IMAGE", {"tooltip": "Optional starting frame or vision reference image."}),
                 "reference_images": ("IMAGE", {"tooltip": "Optional style/context reference images."}),
                 "audio": ("AUDIO", {"tooltip": "Optional reference audio."}),
@@ -859,8 +928,8 @@ class ETNodesGeminiApiVideo:
     RETURN_NAMES = ("video", "images", "audio", "session",)
     FUNCTION = "execute"
 
-    def execute(self, prompt, aspect_ratio, duration_seconds, resolution, generate_audio, safety_level, seed,
-                API_key=None, system_prompt=None, image=None, reference_images=None, audio=None, video=None, session=None):
+    def execute(self, prompt, system_prompt, model, resolution, aspect_ratio, duration_seconds, generate_audio, safety_level, seed,
+                API_key=None, image=None, reference_images=None, audio=None, video=None, session=None):
 
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
@@ -868,7 +937,6 @@ class ETNodesGeminiApiVideo:
             raise Exception("Gemini API Key not found. Please provide it in the node's input or set the GEMINI_API_KEY environment variable.")
 
         client = genai.Client(api_key=API_key)
-        model = "gemini-omni-flash-preview"
 
         # 1. Handle dynamic duration clamping/mapping on the backend
         if duration_seconds > 10:
@@ -982,6 +1050,14 @@ class ETNodesGeminiApiVideo:
             temp_mp4_path = temp_mp4.name
 
         try:
+            # 1. Scale video if resolution is 1080p or 4K
+            if resolution in ["1080p", "4K"]:
+                scale_mp4(temp_mp4_path, resolution, aspect_ratio)
+
+            # 2. Strip audio if generate_audio is off
+            if generate_audio == "off":
+                strip_audio_from_mp4(temp_mp4_path)
+
             frames_tensor = load_video_frames(temp_mp4_path)
 
             audio_output = None
@@ -1024,4 +1100,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ETNodes-Gemini-API-Text": "ETNodes Gemini API Text",
     "ETNodes-Gemini-API-Video": "ETNodes Gemini API Video"
 }
+
 
