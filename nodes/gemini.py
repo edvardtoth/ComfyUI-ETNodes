@@ -883,11 +883,16 @@ class ETNodesGeminiApiVideo:
 
         # 1. Handle dynamic duration clamping/mapping on the backend
         if "veo" in model:
-            supported_durations = [4, 6, 8]
-            closest_duration = min(supported_durations, key=lambda x: abs(x - duration_seconds))
-            if closest_duration != duration_seconds:
-                print(f"ETNodes Warning: Veo models only support durations of 4, 6, or 8 seconds. Adjusted {duration_seconds}s to {closest_duration}s.")
-            duration_seconds = closest_duration
+            if image_last_frame is not None:
+                if duration_seconds != 8:
+                    print(f"ETNodes Warning: Veo frame interpolation (using image_last_frame) is only supported for 8-second clips. Overriding duration to 8s.")
+                duration_seconds = 8
+            else:
+                supported_durations = [4, 6, 8]
+                closest_duration = min(supported_durations, key=lambda x: abs(x - duration_seconds))
+                if closest_duration != duration_seconds:
+                    print(f"ETNodes Warning: Veo models only support durations of 4, 6, or 8 seconds. Adjusted {duration_seconds}s to {closest_duration}s.")
+                duration_seconds = closest_duration
             if generate_audio == "on":
                 print("ETNodes Warning: Audio generation for Veo models is only supported in Gemini Enterprise Agent Platform mode. Omitted audio generation.")
         elif "omni" in model:
