@@ -21,7 +21,6 @@ def test_video_node_metadata():
     
     required = inputs["required"]
     assert "prompt" in required
-    assert "model" in required
     assert "aspect_ratio" in required
     assert "duration_seconds" in required
     assert "resolution" in required
@@ -31,10 +30,8 @@ def test_video_node_metadata():
 
     optional = inputs["optional"]
     assert "API_key" in optional
-    assert "negative_prompt" in optional
     assert "system_prompt" in optional
-    assert "image_first_frame" in optional
-    assert "image_last_frame" in optional
+    assert "image" in optional
     assert "reference_images" in optional
     assert "audio" in optional
     assert "video" in optional

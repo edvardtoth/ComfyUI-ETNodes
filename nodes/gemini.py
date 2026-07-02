@@ -186,14 +186,6 @@ def from_pil(image):
         out = out[:, :, :3]
     return out.unsqueeze(0)
 
-def to_types_image(pil_img) -> types.Image:
-    import io
-    buffered = io.BytesIO()
-    pil_img.save(buffered, format="PNG")
-    return types.Image(
-        image_bytes=buffered.getvalue(),
-        mime_type="image/png"
-    )
 
 
 def get_pils(image_1, image_2, image_3, image_4):
@@ -835,7 +827,7 @@ def extract_audio_from_mp4(mp4_path: str) -> dict | None:
 
 class ETNodesGeminiApiVideo:
     """
-    A node to generate and edit videos using the Google Gemini / Veo API, supporting agentic multi-turn conversational video editing.
+    A node to generate and edit videos using the Google Gemini Omni model, supporting agentic multi-turn conversational video editing.
     """
     NODE_NAME = "ETNodes Gemini API Video"
     CATEGORY = "ETNodes"
@@ -845,7 +837,6 @@ class ETNodesGeminiApiVideo:
         return {
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt describing the video or edit."}),
-                "model": (["gemini-omni-flash-preview", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.1-lite-generate-preview"], {"default": "gemini-omni-flash-preview", "tooltip": "The video generation model to use."}),
                 "aspect_ratio": (["16:9", "9:16"], {"default": "16:9", "tooltip": "The aspect ratio of the generated video."}),
                 "duration_seconds": ("INT", {"default": 4, "min": 1, "max": 10, "step": 1, "tooltip": "The length of the generated video clip in seconds."}),
                 "resolution": (["720p", "1080p", "4K"], {"default": "720p", "tooltip": "The output resolution for the video."}),
@@ -855,14 +846,12 @@ class ETNodesGeminiApiVideo:
             },
             "optional": {
                 "API_key": ("STRING", {"multiline": False, "default": "", "tooltip": "Your Gemini API key."}),
-                "negative_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Elements to exclude from the video (Veo models only)."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system instruction to guide model behavior."}),
-                "image_first_frame": ("IMAGE", {"tooltip": "Optional starting frame for the video."}),
-                "image_last_frame": ("IMAGE", {"tooltip": "Optional ending frame for the video (Veo models only)."}),
-                "reference_images": ("IMAGE", {"tooltip": "Optional reference/subject images for character/asset consistency."}),
+                "image": ("IMAGE", {"tooltip": "Optional starting frame or vision reference image."}),
+                "reference_images": ("IMAGE", {"tooltip": "Optional style/context reference images."}),
                 "audio": ("AUDIO", {"tooltip": "Optional reference audio."}),
                 "video": ("VIDEO", {"tooltip": "Optional source video to perform video-to-video editing."}),
-                "session": ("GEMINI_SESSION", {"tooltip": "Chained conversation state from a previous Gemini API Video node."}),
+                "session": ("GEMINI_SESSION", {"tooltip": "Chained conversation state from a previous Gemini API Video node. Use in combination with the FIXED seed option to prevent regeneration of unchanged content."}),
             }
         }
 
@@ -870,9 +859,8 @@ class ETNodesGeminiApiVideo:
     RETURN_NAMES = ("video", "images", "audio", "session",)
     FUNCTION = "execute"
 
-    def execute(self, prompt, model, aspect_ratio, duration_seconds, resolution, generate_audio, safety_level, seed,
-                API_key=None, negative_prompt=None, system_prompt=None, image_first_frame=None, image_last_frame=None,
-                reference_images=None, audio=None, video=None, session=None):
+    def execute(self, prompt, aspect_ratio, duration_seconds, resolution, generate_audio, safety_level, seed,
+                API_key=None, system_prompt=None, image=None, reference_images=None, audio=None, video=None, session=None):
 
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
@@ -880,27 +868,14 @@ class ETNodesGeminiApiVideo:
             raise Exception("Gemini API Key not found. Please provide it in the node's input or set the GEMINI_API_KEY environment variable.")
 
         client = genai.Client(api_key=API_key)
+        model = "gemini-omni-flash-preview"
 
         # 1. Handle dynamic duration clamping/mapping on the backend
-        if "veo" in model:
-            if image_last_frame is not None:
-                if duration_seconds != 8:
-                    print(f"ETNodes Warning: Veo frame interpolation (using image_last_frame) is only supported for 8-second clips. Overriding duration to 8s.")
-                duration_seconds = 8
-            else:
-                supported_durations = [4, 6, 8]
-                closest_duration = min(supported_durations, key=lambda x: abs(x - duration_seconds))
-                if closest_duration != duration_seconds:
-                    print(f"ETNodes Warning: Veo models only support durations of 4, 6, or 8 seconds. Adjusted {duration_seconds}s to {closest_duration}s.")
-                duration_seconds = closest_duration
-            if generate_audio == "on":
-                print("ETNodes Warning: Audio generation for Veo models is only supported in Gemini Enterprise Agent Platform mode. Omitted audio generation.")
-        elif "omni" in model:
-            if duration_seconds > 10:
-                print(f"ETNodes Warning: Gemini Omni Flash preview supports a maximum duration of 10 seconds. Clamped to 10s.")
-                duration_seconds = 10
+        if duration_seconds > 10:
+            print(f"ETNodes Warning: Gemini Omni Flash preview supports a maximum duration of 10 seconds. Clamped to 10s.")
+            duration_seconds = 10
 
-        # Fallback aspect ratio for all models
+        # Fallback aspect ratio
         if aspect_ratio == "1:1":
             print(f"ETNodes Warning: Video models do not support 1:1 aspect ratio. Falling back to 16:9.")
             aspect_ratio = "16:9"
@@ -915,146 +890,89 @@ class ETNodesGeminiApiVideo:
             history = list(session.get("history", []))
             new_interaction_id = session.get("previous_interaction_id")
 
-        if model == "gemini-omni-flash-preview":
-            # --- Gemini Omni Flash Path (Interactions API) ---
-            input_parts = []
-            uploaded_files = []
+        # --- Gemini Omni Flash Path (Interactions API) ---
+        input_parts = []
+        uploaded_files = []
 
-            # Determine if this is a conversational edit or a fresh run
-            if new_interaction_id is None:
-                # Fresh run: upload any connected images, video, audio reference
-                if image_first_frame is not None:
-                    ref = upload_pil_image_to_files(client, to_pil(image_first_frame))
+        # Determine if this is a conversational edit or a fresh run
+        if new_interaction_id is None:
+            # Fresh run: upload any connected images, video, audio reference
+            if image is not None:
+                ref = upload_pil_image_to_files(client, to_pil(image))
+                uploaded_files.append(ref)
+                input_parts.append({"type": "document", "uri": ref.uri})
+
+            if reference_images is not None:
+                for img in reference_images:
+                    ref = upload_pil_image_to_files(client, to_pil(img))
                     uploaded_files.append(ref)
                     input_parts.append({"type": "document", "uri": ref.uri})
 
-                if reference_images is not None:
-                    for img in reference_images:
-                        ref = upload_pil_image_to_files(client, to_pil(img))
-                        uploaded_files.append(ref)
-                        input_parts.append({"type": "document", "uri": ref.uri})
+            if video is not None:
+                video_path = get_video_path(video)
+                if video_path and os.path.exists(video_path):
+                    ref = client.files.upload(file=video_path)
+                    uploaded_files.append(ref)
+                    input_parts.append({"type": "document", "uri": ref.uri})
 
-                if video is not None:
-                    video_path = get_video_path(video)
-                    if video_path and os.path.exists(video_path):
-                        ref = client.files.upload(file=video_path)
-                        uploaded_files.append(ref)
-                        input_parts.append({"type": "document", "uri": ref.uri})
+            if audio is not None:
+                waveform = audio.get('waveform')
+                sr = audio.get('sample_rate')
+                if waveform is not None and sr is not None:
+                    float_data = waveform[0][0].cpu().numpy()
+                    float_data = np.clip(float_data, -1.0, 1.0)
+                    pcm_data = (float_data * 32767.0).astype(np.int16)
+                    ref = upload_audio_to_files(client, pcm_data, sr)
+                    uploaded_files.append(ref)
+                    input_parts.append({"type": "document", "uri": ref.uri})
 
-                if audio is not None:
-                    waveform = audio.get('waveform')
-                    sr = audio.get('sample_rate')
-                    if waveform is not None and sr is not None:
-                        float_data = waveform[0][0].cpu().numpy()
-                        float_data = np.clip(float_data, -1.0, 1.0)
-                        pcm_data = (float_data * 32767.0).astype(np.int16)
-                        ref = upload_audio_to_files(client, pcm_data, sr)
-                        uploaded_files.append(ref)
-                        input_parts.append({"type": "document", "uri": ref.uri})
-
-                if prompt and prompt.strip():
-                    enhanced_prompt = f"{prompt} (Duration: {duration_seconds} seconds)"
-                    input_parts.append({"type": "text", "text": enhanced_prompt})
-
-                if not input_parts:
-                    raise Exception("Omni Flash requires a prompt or at least one image/video input to start a video generation.")
-
-                wait_for_files_active(client, uploaded_files)
-                api_input = input_parts
-            else:
-                # Conversational Edit
+            if prompt and prompt.strip():
                 enhanced_prompt = f"{prompt} (Duration: {duration_seconds} seconds)"
-                api_input = [{"type": "text", "text": enhanced_prompt}]
+                input_parts.append({"type": "text", "text": enhanced_prompt})
 
-            safety = get_safety_settings(safety_level)
-            gen_config = {
-                "temperature": 1.0,
-                "safety_settings": safety,
-            }
-            response_format = {
-                "type": "video",
-                "aspect_ratio": aspect_ratio
-            }
+            if not input_parts:
+                raise Exception("Omni Flash requires a prompt or at least one image/video input to start a video generation.")
 
-            try:
-                interaction = client.interactions.create(
-                    model=model,
-                    input=api_input,
-                    previous_interaction_id=new_interaction_id,
-                    system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
-                    generation_config=gen_config,
-                    response_format=response_format
-                )
-
-                if not hasattr(interaction, "output_video") or not interaction.output_video:
-                    raise Exception(f"Omni Flash did not return a generated video. Output text: {getattr(interaction, 'output_text', 'None')}")
-
-                if hasattr(interaction.output_video, "data") and interaction.output_video.data:
-                    video_bytes = base64.b64decode(interaction.output_video.data)
-
-                new_interaction_id = interaction.id
-                history.append({"role": "user", "text": prompt})
-                if getattr(interaction, "output_text", None):
-                    history.append({"role": "model", "text": interaction.output_text})
-
-            except Exception as e:
-                raise Exception(f"Omni Flash Interaction failed: {e}")
-
+            wait_for_files_active(client, uploaded_files)
+            api_input = input_parts
         else:
-            # --- Veo 3.1 Path ---
-            first_frame_ref = None
-            last_frame_ref = None
-            ref_images_list = []
+            # Conversational Edit
+            enhanced_prompt = f"{prompt} (Duration: {duration_seconds} seconds)"
+            api_input = [{"type": "text", "text": enhanced_prompt}]
 
-            try:
-                if image_first_frame is not None:
-                    first_frame_ref = to_types_image(to_pil(image_first_frame))
+        safety = get_safety_settings(safety_level)
+        gen_config = {
+            "temperature": 1.0,
+            "safety_settings": safety,
+        }
+        response_format = {
+            "type": "video",
+            "aspect_ratio": aspect_ratio
+        }
 
-                if image_last_frame is not None:
-                    last_frame_ref = to_types_image(to_pil(image_last_frame))
-
-                if reference_images is not None:
-                    for img in reference_images:
-                        ref_images_list.append(types.VideoGenerationReferenceImage(
-                            image=to_types_image(to_pil(img)),
-                            reference_type="asset"
-                        ))
-            except Exception as e:
-                raise Exception(f"Failed to process Veo reference images: {e}")
-
-            veo_config = types.GenerateVideosConfig(
-                aspect_ratio=aspect_ratio,
-                duration_seconds=duration_seconds,
-                resolution=resolution,
-                person_generation="allow_adult",
-                negative_prompt=negative_prompt if negative_prompt and negative_prompt.strip() else None,
-                last_frame=last_frame_ref if last_frame_ref else None,
-                reference_images=ref_images_list if ref_images_list else None,
+        try:
+            interaction = client.interactions.create(
+                model=model,
+                input=api_input,
+                previous_interaction_id=new_interaction_id,
+                system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
+                generation_config=gen_config,
+                response_format=response_format
             )
 
-            try:
-                operation = client.models.generate_videos(
-                    model=model,
-                    prompt=prompt,
-                    image=first_frame_ref if first_frame_ref else None,
-                    config=veo_config
-                )
+            if not hasattr(interaction, "output_video") or not interaction.output_video:
+                raise Exception(f"Omni Flash did not return a generated video. Output text: {getattr(interaction, 'output_text', 'None')}")
 
-                start_time = time.time()
-                while not operation.done:
-                    if time.time() - start_time > 300:
-                        raise Exception("Veo video generation timed out (exceeded 5 minutes).")
-                    time.sleep(2.5)
-                    operation = client.operations.get(operation.name)
+            if hasattr(interaction.output_video, "data") and interaction.output_video.data:
+                video_bytes = base64.b64decode(interaction.output_video.data)
 
-                if not operation.response or not operation.response.generated_videos:
-                    raise Exception("Veo API operation completed, but returned no video.")
+            new_interaction_id = interaction.id
+            history.append({"role": "user", "text": prompt})
+            if getattr(interaction, "output_text", None):
+                history.append({"role": "model", "text": interaction.output_text})
 
-                generated_video = operation.response.generated_videos[0]
-                video_bytes = client.files.download(file=generated_video.video)
-
-            except Exception as e:
-                raise Exception(f"Veo video generation failed: {e}")
+        except Exception as e:
+            raise Exception(f"Omni Flash Interaction failed: {e}")
 
         if not video_bytes:
             raise Exception("No video bytes downloaded from the API.")
