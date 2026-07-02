@@ -186,6 +186,16 @@ def from_pil(image):
         out = out[:, :, :3]
     return out.unsqueeze(0)
 
+def to_types_image(pil_img) -> types.Image:
+    import io
+    buffered = io.BytesIO()
+    pil_img.save(buffered, format="PNG")
+    return types.Image(
+        image_bytes=buffered.getvalue(),
+        mime_type="image/png"
+    )
+
+
 def get_pils(image_1, image_2, image_3, image_4):
     out = []
     if image_1 is not None:
@@ -836,7 +846,7 @@ class ETNodesGeminiApiVideo:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt describing the video or edit."}),
                 "model": (["gemini-omni-flash-preview", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.1-lite-generate-preview"], {"default": "gemini-omni-flash-preview", "tooltip": "The video generation model to use."}),
-                "aspect_ratio": (["16:9", "9:16", "1:1"], {"default": "16:9", "tooltip": "The aspect ratio of the generated video."}),
+                "aspect_ratio": (["16:9", "9:16"], {"default": "16:9", "tooltip": "The aspect ratio of the generated video."}),
                 "duration_seconds": ("INT", {"default": 4, "min": 1, "max": 10, "step": 1, "tooltip": "The length of the generated video clip in seconds."}),
                 "resolution": (["720p", "1080p", "4K"], {"default": "720p", "tooltip": "The output resolution for the video."}),
                 "generate_audio": (["on", "off"], {"default": "on", "tooltip": "Generate synchronized background audio/dialogue."}),
@@ -884,9 +894,11 @@ class ETNodesGeminiApiVideo:
             if duration_seconds > 10:
                 print(f"ETNodes Warning: Gemini Omni Flash preview supports a maximum duration of 10 seconds. Clamped to 10s.")
                 duration_seconds = 10
-            if aspect_ratio == "1:1":
-                print(f"ETNodes Warning: Gemini Omni Flash preview does not support 1:1 aspect ratio. Falling back to 16:9.")
-                aspect_ratio = "16:9"
+
+        # Fallback aspect ratio for all models
+        if aspect_ratio == "1:1":
+            print(f"ETNodes Warning: Video models do not support 1:1 aspect ratio. Falling back to 16:9.")
+            aspect_ratio = "16:9"
 
         # Define outputs list
         video_bytes = None
@@ -985,32 +997,25 @@ class ETNodesGeminiApiVideo:
 
         else:
             # --- Veo 3.1 Path ---
-            uploaded_files = []
             first_frame_ref = None
             last_frame_ref = None
             ref_images_list = []
 
             try:
                 if image_first_frame is not None:
-                    first_frame_ref = upload_pil_image_to_files(client, to_pil(image_first_frame))
-                    uploaded_files.append(first_frame_ref)
+                    first_frame_ref = to_types_image(to_pil(image_first_frame))
 
                 if image_last_frame is not None:
-                    last_frame_ref = upload_pil_image_to_files(client, to_pil(image_last_frame))
-                    uploaded_files.append(last_frame_ref)
+                    last_frame_ref = to_types_image(to_pil(image_last_frame))
 
                 if reference_images is not None:
                     for img in reference_images:
-                        ref = upload_pil_image_to_files(client, to_pil(img))
-                        uploaded_files.append(ref)
                         ref_images_list.append(types.VideoGenerationReferenceImage(
-                            image=ref,
+                            image=to_types_image(to_pil(img)),
                             reference_type="asset"
                         ))
-
-                wait_for_files_active(client, uploaded_files)
             except Exception as e:
-                raise Exception(f"Failed to upload Veo reference images: {e}")
+                raise Exception(f"Failed to process Veo reference images: {e}")
 
             veo_config = types.GenerateVideosConfig(
                 aspect_ratio=aspect_ratio,
