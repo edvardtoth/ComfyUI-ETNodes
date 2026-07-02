@@ -941,10 +941,10 @@ class ETNodesGeminiApiVideo:
                 temperature=1.0,
                 safety_settings=safety,
             )
-            # Custom params mapped inside GenerateContentConfig for the interaction
-            setattr(gen_config, "aspect_ratio", aspect_ratio)
-            setattr(gen_config, "duration_seconds", duration_seconds)
-            setattr(gen_config, "resolution", resolution)
+            response_format = {
+                "type": "video",
+                "aspect_ratio": aspect_ratio
+            }
 
             try:
                 interaction = client.interactions.create(
@@ -952,7 +952,8 @@ class ETNodesGeminiApiVideo:
                     input=api_input,
                     previous_interaction_id=new_interaction_id,
                     system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
-                    generation_config=gen_config
+                    generation_config=gen_config,
+                    response_format=response_format
                 )
 
                 if not hasattr(interaction, "output_video") or not interaction.output_video:
