@@ -10,8 +10,8 @@ def test_video_node_metadata():
     # Verify node signature and categories
     assert ETNodesGeminiApiVideo.NODE_NAME == "ETNodes Gemini API Video"
     assert ETNodesGeminiApiVideo.CATEGORY == "ETNodes"
-    assert ETNodesGeminiApiVideo.RETURN_TYPES == ("IMAGE", "AUDIO", "GEMINI_SESSION",)
-    assert ETNodesGeminiApiVideo.RETURN_NAMES == ("images", "audio", "session",)
+    assert ETNodesGeminiApiVideo.RETURN_TYPES == ("VIDEO", "IMAGE", "AUDIO", "GEMINI_SESSION",)
+    assert ETNodesGeminiApiVideo.RETURN_NAMES == ("video", "images", "audio", "session",)
     assert ETNodesGeminiApiVideo.FUNCTION == "execute"
 
     # Verify input types are correct

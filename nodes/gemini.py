@@ -850,8 +850,8 @@ class ETNodesGeminiApiVideo:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "GEMINI_SESSION",)
-    RETURN_NAMES = ("images", "audio", "session",)
+    RETURN_TYPES = ("VIDEO", "IMAGE", "AUDIO", "GEMINI_SESSION",)
+    RETURN_NAMES = ("video", "images", "audio", "session",)
     FUNCTION = "execute"
 
     def execute(self, prompt, model, aspect_ratio, duration_seconds, resolution, generate_audio, safety_level, seed,
@@ -1059,7 +1059,9 @@ class ETNodesGeminiApiVideo:
                 "last_audio": audio_output
             }
 
-            return (frames_tensor, audio_output if audio_output is not None else {"waveform": torch.zeros(1, 1, 1), "sample_rate": 44100}, session_out)
+            video_output = {"video": temp_mp4_path}
+            audio_data = audio_output if audio_output is not None else {"waveform": torch.zeros(1, 1, 1), "sample_rate": 44100}
+            return (video_output, frames_tensor, audio_data, session_out)
 
         finally:
             pass
