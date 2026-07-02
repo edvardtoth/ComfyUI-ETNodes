@@ -17,6 +17,12 @@ import imageio
 from google import genai
 from google.genai import types, errors
 
+try:
+    from comfy_api.latest import InputImpl
+    HAS_COMFY_API = True
+except ImportError:
+    HAS_COMFY_API = False
+
 SUPPORT_THINKING_LEVEL = True
 GEMINI_MAX_INPUT_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
@@ -1059,7 +1065,15 @@ class ETNodesGeminiApiVideo:
                 "last_audio": audio_output
             }
 
-            video_output = {"video": temp_mp4_path}
+            if HAS_COMFY_API:
+                video_output = InputImpl.VideoFromFile(temp_mp4_path)
+            else:
+                class MockVideo:
+                    def __init__(self, path):
+                        self.path = path
+                    def get_dimensions(self):
+                        return (512, 512)
+                video_output = MockVideo(temp_mp4_path)
             audio_data = audio_output if audio_output is not None else {"waveform": torch.zeros(1, 1, 1), "sample_rate": 44100}
             return (video_output, frames_tensor, audio_data, session_out)
 
