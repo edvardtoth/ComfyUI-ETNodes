@@ -60,7 +60,7 @@ app.registerExtension({
 app.registerExtension({
     name: "ETNodes.utils.NodeColors",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "ETNodes-Gemini-API-Text" || nodeData.name === "ETNodes-Gemini-API-Image") {
+        if (nodeData.name === "ETNodes-Gemini-API-Text" || nodeData.name === "ETNodes-Gemini-API-Image" || nodeData.name === "ETNodes-Gemini-API-Video") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
