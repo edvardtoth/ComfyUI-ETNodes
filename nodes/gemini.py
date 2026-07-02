@@ -934,7 +934,8 @@ class ETNodesGeminiApiVideo:
                         input_parts.append({"type": "document", "uri": ref.uri})
 
                 if prompt and prompt.strip():
-                    input_parts.append({"type": "text", "text": prompt})
+                    enhanced_prompt = f"{prompt} (Duration: {duration_seconds} seconds)"
+                    input_parts.append({"type": "text", "text": enhanced_prompt})
 
                 if not input_parts:
                     raise Exception("Omni Flash requires a prompt or at least one image/video input to start a video generation.")
@@ -943,7 +944,8 @@ class ETNodesGeminiApiVideo:
                 api_input = input_parts
             else:
                 # Conversational Edit
-                api_input = [{"type": "text", "text": prompt}]
+                enhanced_prompt = f"{prompt} (Duration: {duration_seconds} seconds)"
+                api_input = [{"type": "text", "text": enhanced_prompt}]
 
             safety = get_safety_settings(safety_level)
             gen_config = {
