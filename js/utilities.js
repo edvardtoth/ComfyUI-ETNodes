@@ -113,4 +113,60 @@ app.registerExtension({
     }
 });
 
+app.registerExtension({
+    name: "ETNodes.GeminiVideo.ModelControls",
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData.name === "ETNodes-Gemini-API-Video") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+                
+                const modelWidget = this.widgets.find(w => w.name === "model");
+                const resolutionWidget = this.widgets.find(w => w.name === "resolution");
+                const durationWidget = this.widgets.find(w => w.name === "duration_seconds");
+                
+                if (modelWidget) {
+                    const updateModelControls = () => {
+                        const modelValue = modelWidget.value || "";
+                        
+                        // 1. Resolution constraints
+                        if (resolutionWidget) {
+                            const isLiteOrFastVeo = modelValue.includes("lite") || modelValue.includes("fast");
+                            const allowedResolutions = isLiteOrFastVeo ? ["720p", "1080p"] : ["720p", "1080p", "4K"];
+                            
+                            resolutionWidget.options.values = allowedResolutions;
+                            if (!allowedResolutions.includes(resolutionWidget.value)) {
+                                resolutionWidget.value = "720p";
+                            }
+                        }
+                        
+                        // 2. Duration constraints
+                        if (durationWidget) {
+                            const isVeo = modelValue.includes("veo");
+                            const maxDuration = isVeo ? 8 : 10;
+                            
+                            durationWidget.options.max = maxDuration;
+                            if (durationWidget.value > maxDuration) {
+                                durationWidget.value = maxDuration;
+                            }
+                        }
+                    };
+                    
+                    const originalCallback = modelWidget.callback;
+                    modelWidget.callback = function (value) {
+                        const res = originalCallback ? originalCallback.apply(this, arguments) : undefined;
+                        updateModelControls();
+                        return res;
+                    };
+                    
+                    setTimeout(updateModelControls, 1);
+                }
+                
+                return r;
+            };
+        }
+    }
+});
+
+
 
