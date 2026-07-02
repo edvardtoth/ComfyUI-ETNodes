@@ -171,6 +171,7 @@ app.registerExtension({
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 
                 const modelWidget = this.widgets.find(w => w.name === "model");
+                const ratioWidget = this.widgets.find(w => w.name === "aspect_ratio");
                 const resolutionWidget = this.widgets.find(w => w.name === "resolution");
                 const durationWidget = this.widgets.find(w => w.name === "duration_seconds");
                 
@@ -197,6 +198,17 @@ app.registerExtension({
                             durationWidget.options.max = maxDuration;
                             if (durationWidget.value > maxDuration) {
                                 durationWidget.value = maxDuration;
+                            }
+                        }
+
+                        // 3. Aspect Ratio constraints
+                        if (ratioWidget) {
+                            const isOmni = modelValue.includes("omni");
+                            const allowedRatios = isOmni ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"];
+                            
+                            ratioWidget.options.values = allowedRatios;
+                            if (!allowedRatios.includes(ratioWidget.value)) {
+                                ratioWidget.value = "16:9";
                             }
                         }
                     };

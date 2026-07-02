@@ -876,6 +876,9 @@ class ETNodesGeminiApiVideo:
             if duration_seconds > 10:
                 print(f"ETNodes Warning: Gemini Omni Flash preview supports a maximum duration of 10 seconds. Clamped to 10s.")
                 duration_seconds = 10
+            if aspect_ratio == "1:1":
+                print(f"ETNodes Warning: Gemini Omni Flash preview does not support 1:1 aspect ratio. Falling back to 16:9.")
+                aspect_ratio = "16:9"
 
         # Define outputs list
         video_bytes = None
