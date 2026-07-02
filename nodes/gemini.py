@@ -937,10 +937,10 @@ class ETNodesGeminiApiVideo:
                 api_input = [{"type": "text", "text": prompt}]
 
             safety = get_safety_settings(safety_level)
-            gen_config = types.GenerateContentConfig(
-                temperature=1.0,
-                safety_settings=safety,
-            )
+            gen_config = {
+                "temperature": 1.0,
+                "safety_settings": safety,
+            }
             response_format = {
                 "type": "video",
                 "aspect_ratio": aspect_ratio
