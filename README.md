@@ -41,10 +41,10 @@ Deeply integrate the latest multimodal reasoning and image generation capabiliti
 A powerhouse node that allows you to generate and edit images using the latest Google Gemini API models. It supports both **Text-to-Image** and **Image-to-Image** generation workflows.
 
 **Key Features:**
-- **Supported Models**: `gemini-3-pro-image-preview` (Nano Banana Pro), `gemini-3.1-flash-image-preview` (Nano Banana 2).
+- **Supported Models**: `gemini-3-pro-image` (Nano Banana Pro - Stable), `gemini-3.1-flash-image` (Nano Banana 2 - Stable), `gemini-3.1-flash-lite-image` (Nano Banana 2 Lite - Stable).
 - **Multi-Image Prompting**: Supply up to 14 reference images simultaneously when using the Pro model!
 - **Extensive Aspect Ratios**: Choose from an "auto" mode that automatically matches your input image aspect ratio, or select from over a dozen presets. The UI dynamically filters out unsupported ratios depending on the selected model (e.g. `1:4`, `4:1`, `1:8`, `8:1`), with robust backend mapping fallbacks.
-- **Resolution Control**: Granular output resolution controls ranging from 1K to 4K (for Gemini 3 models).
+- **Resolution Control**: Granular output resolution controls ranging from 1K to 4K (only 1K is supported on Lite models).
 - **Safety Overrides**: Full control over content moderation filters, standardizing on the stable `"none"` (maps to standard `BLOCK_NONE`) to disable probability filters while preserving safety metadata.
 - **Search Grounding**: Toggle on to allow the model to search the web for up-to-date information to guide generation.
 - **Advanced Generation Tuning**: Exposes `temperature`, `top_p`, `top_k`, and `seed` variables for fine-tuning visual variety and determinism.
@@ -54,7 +54,7 @@ A powerhouse node that allows you to generate and edit images using the latest G
 A wildly versatile multimodal node that connects directly to Gemini LLMs for text generation and reasoning. It can simultaneously analyze, describe, and synthesize information from a combination of text, images, audio, and video inputs.
 
 **Key Features:**
-- **Supported Models**: `gemini-3.5-flash` (Default), `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite`.
+- **Supported Models**: `gemini-3.5-flash` (Default), `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-pro (Coming Soon)`.
 - **True Multimodality**: Feed it text prompts, standard ComfyUI images, audio, or even direct video files!
 - **Thinking Level Control**: Control the reasoning depth (High, Medium, Low) to balance output quality and generation speed for reasoning-enabled models.
 - **Search Grounding**: Connect the LLM to live Google Search results for real-time querying and research directly inside ComfyUI.

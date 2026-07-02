@@ -3,21 +3,170 @@
 import torch
 import os
 import io
+import time
 import numpy as np
 import random
 import base64
+import hashlib
+import tempfile
 from typing import Any
 
 import PIL.Image
 import PIL.ImageOps
 import imageio
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 
 SUPPORT_THINKING_LEVEL = True
 GEMINI_MAX_INPUT_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
+_GLOBAL_CONTEXT_CACHES = {}
+_CACHE_LIST_RETRIEVED = False
+_UNSUPPORTED_CACHING_MODELS = set()
 
+def get_video_path(video) -> str | None:
+    if video is None:
+        return None
+    if isinstance(video, str):
+        return video
+    if isinstance(video, dict):
+        return video.get("video") or video.get("path") or video.get("filename")
+    return (
+        getattr(video, "video", None) or 
+        getattr(video, "path", None) or 
+        getattr(video, "filename", None) or 
+        getattr(video, "_VideoFromFile__file", None)
+    )
+
+def compute_context_hash(model: str, system_prompt: str, search_grounding: str, images=None, audio=None, video=None) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(model.encode('utf-8'))
+    hasher.update((system_prompt or "").encode('utf-8'))
+    hasher.update(search_grounding.encode('utf-8'))
+    
+    if images is not None:
+        try:
+            for img in images:
+                hasher.update(img.cpu().numpy().tobytes())
+        except Exception as e:
+            print(f"ETNodes Warning: Failed to hash images tensor for cache: {e}")
+            
+    if audio is not None:
+        try:
+            waveform = audio.get("waveform")
+            sample_rate = audio.get("sample_rate")
+            if waveform is not None:
+                hasher.update(waveform.cpu().numpy().tobytes())
+            if sample_rate is not None:
+                hasher.update(str(sample_rate).encode('utf-8'))
+        except Exception as e:
+            print(f"ETNodes Warning: Failed to hash audio for cache: {e}")
+            
+    if video is not None:
+        try:
+            video_path = get_video_path(video)
+            if video_path and os.path.exists(video_path):
+                hasher.update(video_path.encode('utf-8'))
+                hasher.update(str(os.path.getsize(video_path)).encode('utf-8'))
+                hasher.update(str(os.path.getmtime(video_path)).encode('utf-8'))
+        except Exception as e:
+            print(f"ETNodes Warning: Failed to hash video for cache: {e}")
+            
+    return hasher.hexdigest()
+
+def get_cached_content_name(client, cache_hash: str) -> str | None:
+    global _CACHE_LIST_RETRIEVED
+    if cache_hash in _GLOBAL_CONTEXT_CACHES:
+        return _GLOBAL_CONTEXT_CACHES[cache_hash]
+    
+    if not _CACHE_LIST_RETRIEVED:
+        try:
+            for cache in client.caches.list():
+                if cache.display_name:
+                    _GLOBAL_CONTEXT_CACHES[cache.display_name] = cache.name
+            _CACHE_LIST_RETRIEVED = True
+        except Exception as e:
+            print(f"ETNodes Warning: Failed to list context caches from API: {e}")
+            
+    return _GLOBAL_CONTEXT_CACHES.get(cache_hash)
+
+def count_tokens_helper(client, model: str, contents, system_prompt: str) -> int:
+    try:
+        config = types.CountTokensConfig(
+            system_instruction=system_prompt if system_prompt and system_prompt.strip() else None
+        )
+        response = client.models.count_tokens(
+            model=model,
+            contents=contents,
+            config=config
+        )
+        return response.total_tokens
+    except Exception:
+        try:
+            response = client.models.count_tokens(
+                model=model,
+                contents=contents
+            )
+            sys_tokens = len(system_prompt) // 4 if system_prompt else 0
+            return response.total_tokens + sys_tokens
+        except Exception as e:
+            print(f"ETNodes Warning: Failed to count tokens: {e}")
+            return 0
+
+def upload_pil_image_to_files(client, pil_image) -> Any:
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+        pil_image.save(temp_file.name, format="PNG")
+        temp_file_path = temp_file.name
+    try:
+        return client.files.upload(file=temp_file_path)
+    finally:
+        if os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                pass
+
+def upload_audio_to_files(client, pcm_data, sample_rate) -> Any:
+    import wave
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+        with wave.open(temp_file.name, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_data.tobytes())
+        temp_audio_path = temp_file.name
+    try:
+        return client.files.upload(file=temp_audio_path)
+    finally:
+        if os.path.exists(temp_audio_path):
+            try:
+                os.remove(temp_audio_path)
+            except Exception:
+                pass
+
+def wait_for_files_active(client, files):
+    if not files:
+        return
+    start_time = time.time()
+    pending_files = list(files)
+    while pending_files and (time.time() - start_time) < 120:
+        active_files = []
+        for f in pending_files:
+            try:
+                updated_f = client.files.get(name=f.name)
+                state_name = getattr(updated_f.state, "name", str(updated_f.state))
+                if state_name == "ACTIVE":
+                    active_files.append(f)
+                elif state_name == "FAILED":
+                    print(f"ETNodes Warning: File upload failed processing for {f.name}")
+                    active_files.append(f)
+            except Exception as e:
+                print(f"ETNodes Warning: Error checking file status for {f.name}: {e}")
+                active_files.append(f)
+        for f in active_files:
+            pending_files.remove(f)
+        if pending_files:
+            time.sleep(1.0)
 
 
 def to_pil(image):
@@ -83,29 +232,34 @@ class ETNodesGeminiApiImage:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt to generate an image from."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"], {"default": "gemini-3-pro-image-preview", "tooltip": "The model to use for image generation and editing.\nNano Banana Pro --> gemini-3-pro-image-preview\nNano Banana 2 --> gemini-3.1-flash-image-preview"}),
-                "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image (Gemini 3 models only)."}),
+                "model": (["gemini-3-pro-image", "gemini-3.1-flash-image", "gemini-3.1-flash-lite-image"], {"default": "gemini-3-pro-image", "tooltip": "The model to use for image generation and editing.\nNano Banana Pro --> gemini-3-pro-image\nNano Banana 2 --> gemini-3.1-flash-image\nNano Banana 2 Lite --> gemini-3.1-flash-lite-image"}),
+                "resolution": (["1K", "2K", "4K"], {"default": "1K", "tooltip": "The output resolution for the generated image."}),
                 "aspect_ratio": (["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"], {"default": "auto", "tooltip": "The aspect ratio of the generated image.\nThe AUTO setting will match the aspect ratio of the input image(s)."}),
                 "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "advanced": True, "tooltip": "The safety level for content moderation.\nNONE - Will disable probability-based safety filters for harassment, hate speech, sexual content, and dangerous content (some core protections cannot be disabled)."}),
                 "search_grounding": (["off", "on"], {"default": "off", "advanced": True, "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
                 "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "advanced": True, "tooltip": "Adjusts visual variety and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
                 "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "advanced": True, "tooltip": "Controls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
                 "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "advanced": True, "tooltip": "Limits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
+                "context_caching": (["on", "off"], {"default": "on", "advanced": True, "tooltip": "Enable context caching to conserve API credits and reduce latency when reusing the same system prompts or reference media.\nAt least a 4096 token payload is required. Not all models support caching."}),
+                "cache_ttl": ("INT", {"default": 300, "min": 60, "max": 86400, "step": 60, "advanced": True, "tooltip": "The lifespan (Time-to-Live) of the cache in seconds. The cache is automatically extended on hit, and deleted after this duration of inactivity."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
                 "API_key": ("STRING", {"multiline": False, "default": "","tooltip": "Your Gemini API key.\n\nAdd the API key to a GEMINI_API_KEY environment variable\nand leave this field blank for more convenience and security."}),
-                "images": ("IMAGE", {"tooltip": "Optional batch of input images.\nUp to 14 images for gemini-3-pro-image-preview."}),
+                "images": ("IMAGE", {"tooltip": "Optional batch of input images.\nUp to 14 images for gemini-3-pro-image."}),
             }
         }
 
     RETURN_TYPES = ("IMAGE",)
+    OUTPUT_NODE = True
     FUNCTION = "execute"
     
-    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, aspect_ratio, resolution, temperature, top_p, top_k, seed, API_key=None, images=None):
-        # Map legacy 2.5 models to prevent breaking existing workflows
-        if model == "gemini-2.5-flash-image":
-            model = "gemini-3-pro-image-preview"
+    def execute(self, prompt, system_prompt, model, safety_level, search_grounding, aspect_ratio, resolution, temperature, top_p, top_k, context_caching, cache_ttl, seed, API_key=None, images=None):
+        # Map legacy/preview models to prevent breaking existing workflows
+        if model in ["gemini-2.5-flash-image", "gemini-3-pro-image-preview"]:
+            model = "gemini-3-pro-image"
+        elif model == "gemini-3.1-flash-image-preview":
+            model = "gemini-3.1-flash-image"
 
         if API_key is None or API_key.strip() == "":
             API_key = os.environ.get("GEMINI_API_KEY")
@@ -116,8 +270,8 @@ class ETNodesGeminiApiImage:
 
         pils = []
         if images is not None:
-            if model == "gemini-3-pro-image-preview" and len(images) > 14:
-                raise Exception("The gemini-3-pro-image-preview model supports a maximum of 14 images.")
+            if model in ["gemini-3-pro-image", "gemini-3-pro-image-preview"] and len(images) > 14:
+                raise Exception("The gemini-3-pro-image model supports a maximum of 14 images.")
             for image in images:
                 pils.append(to_pil(image))
 
@@ -127,17 +281,12 @@ class ETNodesGeminiApiImage:
         if prompt.strip() == "" and pils:
             prompt = "What is in this image? Describe it in detail."
 
-        contents = []
-        if prompt:
-            contents.append(prompt)
-        contents.extend(pils)
-
         image_config = None
         if aspect_ratio != "auto" or "gemini-3" in model:
             img_conf_params = {}
             if aspect_ratio != "auto":
                 final_aspect_ratio = aspect_ratio
-                if model == "gemini-3-pro-image-preview":
+                if model in ["gemini-3-pro-image", "gemini-3-pro-image-preview"]:
                     # Fallback mapping for models that don't support the new aspect ratios
                     ratio_fallback = {
                         "1:4": "2:3",
@@ -154,29 +303,129 @@ class ETNodesGeminiApiImage:
             # Use dict instead of types.ImageConfig to avoid version compatibility issues
             image_config = img_conf_params
 
-        # Construct configuration using types
-        config = types.GenerateContentConfig(
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            max_output_tokens=32768,
-            response_modalities=["IMAGE"],
-            safety_settings=get_safety_settings(safety_level),
-            image_config=image_config,  # type: ignore
-            system_instruction=system_prompt if system_prompt and system_prompt.strip() else None
-        )
-
-        if search_grounding == "on":
-             config.tools = [{"google_search": {}}]  # type: ignore
-
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config
-            )
-        except Exception as e:
-            raise Exception(f"API request failed: {e}")
+        # Retry loop for generation (in case of expired/missing cache 404 error)
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            cache_name = None
+            is_cached = False
+            
+            if context_caching == "on" and model not in _UNSUPPORTED_CACHING_MODELS:
+                cache_hash = compute_context_hash(
+                    model,
+                    system_prompt,
+                    "on" if search_grounding == "on" else "off",
+                    images,
+                    None,
+                    None
+                )
+                
+                cached_val = get_cached_content_name(client, cache_hash)
+                
+                if cached_val == "TOO_SMALL":
+                    pass
+                elif cached_val is not None:
+                    cache_name = cached_val
+                    is_cached = True
+                    try:
+                        client.caches.update(
+                            name=cache_name,
+                            config=types.UpdateCachedContentConfig(ttl=f"{cache_ttl}s")
+                        )
+                    except Exception as e:
+                        print(f"ETNodes Warning: Failed to refresh cache TTL: {e}")
+                else:
+                    # Check token count to decide whether to cache
+                    total_tokens = count_tokens_helper(client, model, pils, system_prompt)
+                    min_tokens = 2048 if "gemini-2" in model else 4096
+                    
+                    if total_tokens >= min_tokens:
+                        print(f"ETNodes Gemini API: Caching enabled. Input context meets minimum token threshold ({total_tokens}/{min_tokens} tokens). Creating cache...")
+                        uploaded_files = []
+                        
+                        try:
+                            if images is not None:
+                                for img in images:
+                                    pil_img = to_pil(img)
+                                    ref = upload_pil_image_to_files(client, pil_img)
+                                    uploaded_files.append(ref)
+                                    
+                            # Wait for all uploaded files to transition to ACTIVE state
+                            wait_for_files_active(client, uploaded_files)
+                                    
+                            cache_contents_for_creation = uploaded_files if uploaded_files else ["Cached context instructions:"]
+                            
+                            cache = client.caches.create(
+                                model=model,
+                                config=types.CreateCachedContentConfig(
+                                    contents=cache_contents_for_creation,
+                                    system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
+                                    tools=[{"google_search": {}}] if search_grounding == "on" else None,
+                                    ttl=f"{cache_ttl}s",
+                                    display_name=cache_hash
+                                )
+                            )
+                            cache_name = cache.name
+                            _GLOBAL_CONTEXT_CACHES[cache_hash] = cache_name
+                            is_cached = True
+                        except Exception as e:
+                            print(f"ETNodes Warning: Failed to create context cache: {e}")
+                            err_str = str(e).lower()
+                            if "not supported" in err_str or "not found" in err_str or "404" in err_str:
+                                print(f"ETNodes Gemini API: Caching is not supported for model '{model}'. Disabling caching for this model.")
+                                _UNSUPPORTED_CACHING_MODELS.add(model)
+                    else:
+                        print(f"ETNodes Gemini API: Caching skipped. Context size ({total_tokens} tokens) is below the minimum threshold ({min_tokens} tokens).")
+                        _GLOBAL_CONTEXT_CACHES[cache_hash] = "TOO_SMALL"
+                        
+            # Configure request parameters based on cached state
+            if cache_name:
+                gen_contents = [prompt]
+                gen_config = types.GenerateContentConfig(
+                    cached_content=cache_name,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    max_output_tokens=32768,
+                    response_modalities=["IMAGE"],
+                    safety_settings=get_safety_settings(safety_level),
+                    image_config=image_config
+                )
+            else:
+                # Standard generation
+                gen_contents = []
+                if prompt:
+                    gen_contents.append(prompt)
+                gen_contents.extend(pils)
+                
+                gen_config = types.GenerateContentConfig(
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    max_output_tokens=32768,
+                    response_modalities=["IMAGE"],
+                    safety_settings=get_safety_settings(safety_level),
+                    image_config=image_config,
+                    system_instruction=system_prompt if system_prompt and system_prompt.strip() else None
+                )
+                if search_grounding == "on":
+                    gen_config.tools = [{"google_search": {}}]
+            
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=gen_contents,
+                    config=gen_config
+                )
+                break
+            except errors.APIError as e:
+                # Catch 404 Cache Expired/Not Found to retry once
+                if e.code == 404 and cache_name and attempt < max_attempts - 1:
+                    print(f"ETNodes Gemini API: Cache expired or not found (404). Re-creating cache for hash...")
+                    if cache_hash in _GLOBAL_CONTEXT_CACHES:
+                        del _GLOBAL_CONTEXT_CACHES[cache_hash]
+                    continue
+                else:
+                    raise Exception(f"API request failed: {e}")
 
         images_out = []
         text_responses = []
@@ -184,11 +433,7 @@ class ETNodesGeminiApiImage:
         # Parse response
         if response.candidates:
             for candidate in response.candidates:
-                # Handle finish reasons specifically
                 if hasattr(candidate, "finish_reason"):
-                    # Check for safety block
-                    # Comparison can be done against the Enum or the string value depending on SDK version
-                    # simple string checks are robust
                     reason = str(candidate.finish_reason)
                     if "IMAGE_SAFETY" in reason:
                          raise Exception("Safety Block: The generated content was filtered due to safety settings.\nTry adjusting the 'safety_level' or modifying the prompt.")
@@ -198,11 +443,8 @@ class ETNodesGeminiApiImage:
                 if hasattr(candidate, "content") and candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
                         if part.inline_data:
-                            # Handling inline image data
-                            # part.inline_data.data should be bytes in new SDK
                             image_data = part.inline_data.data
                             if image_data is not None:
-                                # If it is base64 string (some versions), decode it
                                 if isinstance(image_data, str):
                                     image_data = base64.b64decode(image_data)
                                 
@@ -213,13 +455,11 @@ class ETNodesGeminiApiImage:
         
         if not images_out:
             text_response = " ".join(text_responses)
-            
             if text_response:
                 raise Exception(f"No image was generated. The model returned text instead: {text_response}")
-            
             raise Exception(f"No image was generated and no text explanation was provided. Response object: {response}")
 
-        return (torch.cat(images_out, dim=0),)  # type: ignore
+        return {"ui": {"cached": [is_cached]}, "result": (torch.cat(images_out, dim=0),)}
 
 class ETNodesGeminiApiText:
     """
@@ -234,13 +474,15 @@ class ETNodesGeminiApiText:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt for the model."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite"], {"default": "gemini-3.5-flash", "tooltip": "The model to use for input file analysis and text generation."}),
+                "model": (["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-3.5-pro (Coming Soon)"], {"default": "gemini-3.5-flash", "tooltip": "The model to use for input file analysis and text generation."}),
                 "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "advanced": True, "tooltip": "The safety level for content moderation.\nNONE - Will disable probability-based safety filters for harassment, hate speech, sexual content, and dangerous content (some core protections cannot be disabled)."}),
                 "thinking_level": (["high", "medium", "low"], {"default": "high", "advanced": True, "tooltip": "Determine the reasoning depth for Gemini 3 and 3.5 models.\nDefault is HIGH for maximum reasoning."}),
                 "search_grounding": (["off", "on"], {"default": "off", "advanced": True, "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
                 "temperature": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1, "advanced": True, "tooltip": "Controls creative flair and randomness. Lower values are more deterministic.\nDefault is 1.0."}),
                 "top_p": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.05, "advanced": True, "tooltip": "Controls the diversity of tokens considered. Lower values increase determinism.\nDefault is 0.95."}),
                 "top_k": ("INT", {"default": 64, "min": 1, "max": 8192, "step": 1, "advanced": True, "tooltip": "Limits token selection to the top K most probable. Higher values increase variety.\nDefault is 64."}),
+                "context_caching": (["on", "off"], {"default": "on", "advanced": True, "tooltip": "Enable context caching to conserve API credits and reduce latency when reusing the same system prompts or reference media.\nAt least a 4096 token payload is required. Not all models support caching."}),
+                "cache_ttl": ("INT", {"default": 300, "min": 60, "max": 86400, "step": 60, "advanced": True, "tooltip": "The lifespan (Time-to-Live) of the cache in seconds. The cache is automatically extended on hit, and deleted after this duration of inactivity."}),
                 "seed": ("INT", {"default": random.randint(0, 0xffffffffffffffff), "min": 0, "max": 0xffffffffffffffff}),
             },
             "optional": {
@@ -252,9 +494,13 @@ class ETNodesGeminiApiText:
         }
 
     RETURN_TYPES = ("STRING",)
+    OUTPUT_NODE = True
     FUNCTION = "execute"
 
-    def execute(self, prompt, system_prompt, model, safety_level, thinking_level, search_grounding, temperature, top_p, top_k, seed, API_key=None, images=None, audio=None, video=None):
+    def execute(self, prompt, system_prompt, model, safety_level, thinking_level, search_grounding, temperature, top_p, top_k, context_caching, cache_ttl, seed, API_key=None, images=None, audio=None, video=None):
+        if "Coming Soon" in model:
+            raise Exception("Gemini 3.5 Pro has not been released yet by Google. Please choose an active model.")
+
         # Map legacy models to prevent breaking existing workflows
         if model == "gemini-2.5-flash":
             model = "gemini-3.5-flash"
@@ -270,15 +516,15 @@ class ETNodesGeminiApiText:
 
         client = genai.Client(api_key=API_key)
 
-        contents = []
-        if prompt and prompt.strip():
-            contents.append(prompt)
-
+        # 1. Build cacheable static contents
+        cache_contents = []
         if images is not None:
             for image in images:
-                pil_image = to_pil(image)
-                contents.append(pil_image)
+                cache_contents.append(to_pil(image))
 
+        pcm_data = None
+        sample_rate = None
+        audio_part = None
         if audio is not None:
             import wave
             waveform = audio.get('waveform')
@@ -287,100 +533,191 @@ class ETNodesGeminiApiText:
             if waveform is None or sample_rate is None:
                 raise Exception("Invalid audio input. Must contain 'waveform' and 'sample_rate'.")
             
-            # Check waveform shape dimensions
             shape = waveform.shape
             if len(shape) < 3:
                 raise Exception(f"Invalid audio waveform shape: {shape}. Expected [batch, channels, samples].")
             
-            # Convert float tensor to 16-bit PCM, taking the first channel of the first batch
             float_data = waveform[0][0].cpu().numpy()
-            
-            # Clip float audio values to prevent integer overflow distortion
             float_data = np.clip(float_data, -1.0, 1.0)
             pcm_data = (float_data * 32767.0).astype(np.int16)
             
-            buffer = io.BytesIO()
-            with wave.open(buffer, 'wb') as wf:
+            audio_buffer = io.BytesIO()
+            with wave.open(audio_buffer, 'wb') as wf:
                 wf.setnchannels(1)
-                wf.setsampwidth(2) # 2 bytes = 16 bits
+                wf.setsampwidth(2)
                 wf.setframerate(sample_rate)
                 wf.writeframes(pcm_data.tobytes())
             
-            contents.append(types.Part(
+            audio_part = types.Part(
                 inline_data=types.Blob(
                     mime_type="audio/wav",
-                    data=buffer.getvalue()
+                    data=audio_buffer.getvalue()
                 )
-            ))
+            )
+            cache_contents.append(audio_part)
 
+        video_path = None
+        video_part = None
         if video is not None:
-            # Video can be a string filepath, a dict, or a custom class/object
-            video_path = None
-            if isinstance(video, str):
-                video_path = video
-            elif isinstance(video, dict):
-                video_path = video.get("video") or video.get("path") or video.get("filename")
-            else:
-                # Try getting the filepath from known properties/methods or fallback to name mangling
-                video_path = (
-                    getattr(video, "video", None) or 
-                    getattr(video, "path", None) or 
-                    getattr(video, "filename", None) or 
-                    getattr(video, "_VideoFromFile__file", None)
-                )
-
+            video_path = get_video_path(video)
             if not video_path or not isinstance(video_path, str) or not os.path.exists(video_path):
                 raise Exception(f"Failed to find or access video file from input: {video}")
 
             if os.path.getsize(video_path) > GEMINI_MAX_INPUT_FILE_SIZE:
                 raise Exception(f"Video file size exceeds the 20MB limit for the Gemini API.")
             
-            from typing import Any
-            # Re-encode the video to a standard format (MP4, H.264) in memory
-            reader: Any = imageio.get_reader(video_path)
+            reader = imageio.get_reader(video_path)
             with reader:
                 fps = reader.get_meta_data().get('fps', 30)
-                buffer = io.BytesIO()
-                writer: Any = imageio.get_writer(buffer, format='mp4', mode='I', fps=fps)  # type: ignore
+                video_buffer = io.BytesIO()
+                writer = imageio.get_writer(video_buffer, format='mp4', mode='I', fps=fps)
                 with writer:
                     for frame in reader:
                         writer.append_data(frame)
             
-            contents.append(types.Part(
+            video_part = types.Part(
                 inline_data=types.Blob(
                     mime_type="video/mp4",
-                    data=buffer.getvalue()
+                    data=video_buffer.getvalue()
                 )
-            ))
-
-        if not contents:
-            raise Exception("At least one input (prompt, image, audio, or video) is required.")
-
-        config = types.GenerateContentConfig(
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            max_output_tokens=32768,
-            safety_settings=get_safety_settings(safety_level),
-            system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
-        )
-
-        if SUPPORT_THINKING_LEVEL:
-            setattr(config, "thinking_config", types.ThinkingConfig(thinking_level=thinking_level.upper())) # type: ignore
-        else:
-            print(f"ETNodes Warning: Ignored thinking_level '{thinking_level}' because the current google-genai package loaded in memory does not support it. Please restart ComfyUI to apply the pending SDK update.")
-
-        if search_grounding == "on":
-            config.tools = [{"google_search": {}}]  # type: ignore
-
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config
             )
-        except Exception as e:
-            raise Exception(f"API request failed: {e}")
+            cache_contents.append(video_part)
+
+        # Retry loop for generation (in case of expired/missing cache 404 error)
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            cache_name = None
+            is_cached = False
+            
+            if context_caching == "on" and model not in _UNSUPPORTED_CACHING_MODELS:
+                cache_hash = compute_context_hash(
+                    model,
+                    system_prompt,
+                    "on" if search_grounding == "on" else "off",
+                    images,
+                    audio,
+                    video
+                )
+                
+                cached_val = get_cached_content_name(client, cache_hash)
+                
+                if cached_val == "TOO_SMALL":
+                    pass
+                elif cached_val is not None:
+                    # Cache hit!
+                    cache_name = cached_val
+                    is_cached = True
+                    try:
+                        client.caches.update(
+                            name=cache_name,
+                            config=types.UpdateCachedContentConfig(ttl=f"{cache_ttl}s")
+                        )
+                    except Exception as e:
+                        print(f"ETNodes Warning: Failed to refresh cache TTL: {e}")
+                else:
+                    # Check token count to decide whether to cache
+                    total_tokens = count_tokens_helper(client, model, cache_contents, system_prompt)
+                    min_tokens = 2048 if "gemini-2" in model else 4096
+                    
+                    if total_tokens >= min_tokens:
+                        print(f"ETNodes Gemini API: Caching enabled. Input context meets minimum token threshold ({total_tokens}/{min_tokens} tokens). Creating cache...")
+                        uploaded_files = []
+                        
+                        try:
+                            if images is not None:
+                                for img in images:
+                                    pil_img = to_pil(img)
+                                    ref = upload_pil_image_to_files(client, pil_img)
+                                    uploaded_files.append(ref)
+                                    
+                            if audio is not None and pcm_data is not None and sample_rate is not None:
+                                ref = upload_audio_to_files(client, pcm_data, sample_rate)
+                                uploaded_files.append(ref)
+                                
+                            if video is not None and video_path is not None:
+                                ref = client.files.upload(file=video_path)
+                                uploaded_files.append(ref)
+                                
+                            # Wait for all uploaded files to transition to ACTIVE state
+                            wait_for_files_active(client, uploaded_files)
+                                
+                            cache_contents_for_creation = uploaded_files if uploaded_files else ["Cached context instructions:"]
+                            
+                            cache = client.caches.create(
+                                model=model,
+                                config=types.CreateCachedContentConfig(
+                                    contents=cache_contents_for_creation,
+                                    system_instruction=system_prompt if system_prompt and system_prompt.strip() else None,
+                                    tools=[{"google_search": {}}] if search_grounding == "on" else None,
+                                    ttl=f"{cache_ttl}s",
+                                    display_name=cache_hash
+                                )
+                            )
+                            cache_name = cache.name
+                            _GLOBAL_CONTEXT_CACHES[cache_hash] = cache_name
+                            is_cached = True
+                        except Exception as e:
+                            print(f"ETNodes Warning: Failed to create context cache: {e}")
+                            err_str = str(e).lower()
+                            if "not supported" in err_str or "not found" in err_str or "404" in err_str:
+                                print(f"ETNodes Gemini API: Caching is not supported for model '{model}'. Disabling caching for this model.")
+                                _UNSUPPORTED_CACHING_MODELS.add(model)
+                    else:
+                        print(f"ETNodes Gemini API: Caching skipped. Context size ({total_tokens} tokens) is below the minimum threshold ({min_tokens} tokens).")
+                        _GLOBAL_CONTEXT_CACHES[cache_hash] = "TOO_SMALL"
+                        
+            # Configure request parameters based on cached state
+            if cache_name:
+                gen_contents = [prompt] if prompt and prompt.strip() else ["What is in this context? Describe it."]
+                gen_config = types.GenerateContentConfig(
+                    cached_content=cache_name,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    max_output_tokens=32768,
+                    safety_settings=get_safety_settings(safety_level)
+                )
+                if SUPPORT_THINKING_LEVEL:
+                    setattr(gen_config, "thinking_config", types.ThinkingConfig(thinking_level=thinking_level.upper()))
+            else:
+                # Standard generation
+                gen_contents = []
+                if prompt and prompt.strip():
+                    gen_contents.append(prompt)
+                gen_contents.extend(cache_contents)
+                
+                if not gen_contents:
+                    raise Exception("At least one input (prompt, image, audio, or video) is required.")
+                    
+                gen_config = types.GenerateContentConfig(
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    max_output_tokens=32768,
+                    safety_settings=get_safety_settings(safety_level),
+                    system_instruction=system_prompt if system_prompt and system_prompt.strip() else None
+                )
+                if SUPPORT_THINKING_LEVEL:
+                    setattr(gen_config, "thinking_config", types.ThinkingConfig(thinking_level=thinking_level.upper()))
+                if search_grounding == "on":
+                    gen_config.tools = [{"google_search": {}}]
+            
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=gen_contents,
+                    config=gen_config
+                )
+                break
+            except errors.APIError as e:
+                # Catch 404 Cache Expired/Not Found to retry once
+                if e.code == 404 and cache_name and attempt < max_attempts - 1:
+                    print(f"ETNodes Gemini API: Cache expired or not found (404). Re-creating cache for hash...")
+                    if cache_hash in _GLOBAL_CONTEXT_CACHES:
+                        del _GLOBAL_CONTEXT_CACHES[cache_hash]
+                    continue
+                else:
+                    raise Exception(f"API request failed: {e}")
 
         text_responses = []
         if response.candidates:
@@ -392,7 +729,6 @@ class ETNodesGeminiApiText:
                     if "RECITATION" in reason:
                         raise Exception("Recitation Block: The model flagged this as potential copyright infringement (recitation).")
                     if "OTHER" in reason:
-                        # Sometimes happens with high complexity or internal errors
                         raise Exception("Model Refusal: The model refused to generate text (Reason: OTHER).\nThis may be due to prompt complexity or safety constraints not explicitly flagged.")
 
                 if hasattr(candidate, "content") and candidate.content and candidate.content.parts:
@@ -401,10 +737,9 @@ class ETNodesGeminiApiText:
                             text_responses.append(part.text)
 
         if not text_responses:
-            # Simple error reporting
             raise Exception(f"The model returned no text. Response object: {response}")
 
-        return (" ".join(text_responses),)
+        return {"ui": {"cached": [is_cached]}, "result": (" ".join(text_responses),)}
 
 NODE_CLASS_MAPPINGS = {
     "ETNodes-Gemini-API-Image": ETNodesGeminiApiImage,

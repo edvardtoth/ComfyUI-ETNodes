@@ -66,14 +66,48 @@ app.registerExtension({
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 this.color = "#ae1016";
                 this.bgcolor = "#1c1112";
+                this.properties = this.properties || {};
+                this.properties.cached = false;
                 return r;
+            };
+
+            const onExecuted = nodeType.prototype.onExecuted;
+            nodeType.prototype.onExecuted = function (message) {
+                onExecuted?.apply(this, arguments);
+                
+                const isCached = message?.cached?.[0] || false;
+                this.properties.cached = isCached;
+                
+                // Get clean title
+                let baseTitle = this.title || nodeData.displayName || nodeData.name;
+                if (baseTitle.endsWith(" [CACHING ACTIVE]")) {
+                    baseTitle = baseTitle.substring(0, baseTitle.length - 17);
+                }
+                
+                if (isCached) {
+                    this.title = baseTitle + " [CACHING ACTIVE]";
+                } else {
+                    this.title = baseTitle;
+                }
+                
+                console.log("ETNodes Gemini Caching Status:", isCached);
+                this.setDirtyCanvas?.(true, true);
+            };
+
+            // Clean up the [CACHING ACTIVE] suffix when saving the workflow JSON
+            const onSerialize = nodeType.prototype.onSerialize;
+            nodeType.prototype.onSerialize = function (o) {
+                onSerialize?.apply(this, arguments);
+                if (o.title && o.title.endsWith(" [CACHING ACTIVE]")) {
+                    o.title = o.title.substring(0, o.title.length - 17);
+                }
             };
         }
     },
 });
 
 app.registerExtension({
-    name: "ETNodes.GeminiImage.AspectRatios",
+    name: "ETNodes.GeminiImage.ModelControls",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "ETNodes-Gemini-API-Image") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
@@ -82,10 +116,14 @@ app.registerExtension({
                 
                 const modelWidget = this.widgets.find(w => w.name === "model");
                 const ratioWidget = this.widgets.find(w => w.name === "aspect_ratio");
+                const resolutionWidget = this.widgets.find(w => w.name === "resolution");
                 
                 if (modelWidget && ratioWidget) {
-                    const updateRatios = () => {
-                        const isFlash = modelWidget.value === "gemini-3.1-flash-image-preview";
+                    const updateModelControls = () => {
+                        const modelValue = modelWidget.value || "";
+                        
+                        // 1. Aspect Ratios
+                        const isFlash = modelValue.includes("flash");
                         const allRatios = ["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"];
                         const proRatios = ["auto", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "9:16", "16:9", "21:9"];
                         
@@ -95,16 +133,27 @@ app.registerExtension({
                         if (!newRatios.includes(ratioWidget.value)) {
                             ratioWidget.value = "auto";
                         }
+                        
+                        // 2. Resolutions
+                        if (resolutionWidget) {
+                            const isLite = modelValue.includes("lite");
+                            const newResolutions = isLite ? ["1K"] : ["1K", "2K", "4K"];
+                            resolutionWidget.options.values = newResolutions;
+                            
+                            if (!newResolutions.includes(resolutionWidget.value)) {
+                                resolutionWidget.value = "1K";
+                            }
+                        }
                     };
                     
                     const originalCallback = modelWidget.callback;
                     modelWidget.callback = function (value) {
                         const res = originalCallback ? originalCallback.apply(this, arguments) : undefined;
-                        updateRatios();
+                        updateModelControls();
                         return res;
                     };
                     
-                    setTimeout(updateRatios, 1);
+                    setTimeout(updateModelControls, 1);
                 }
                 
                 return r;
