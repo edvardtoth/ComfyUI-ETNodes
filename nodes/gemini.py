@@ -482,7 +482,7 @@ class ETNodesGeminiApiText:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "The text prompt for the model."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional system prompt to guide the model's behavior.\nParticularly useful for defining a persona for the model."}),
-                "model": (["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-3.5-pro (Coming Soon)"], {"default": "gemini-3.5-flash", "tooltip": "The model to use for input file analysis and text generation."}),
+                "model": (["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite"], {"default": "gemini-3.5-flash", "tooltip": "The model to use for input file analysis and text generation."}),
                 "safety_level": (["none", "minimum", "medium", "maximum"], {"default": "none", "advanced": True, "tooltip": "The safety level for content moderation.\nNONE - Will disable probability-based safety filters for harassment, hate speech, sexual content, and dangerous content (some core protections cannot be disabled)."}),
                 "thinking_level": (["high", "medium", "low"], {"default": "high", "advanced": True, "tooltip": "Determine the reasoning depth for Gemini 3 and 3.5 models.\nDefault is HIGH for maximum reasoning."}),
                 "search_grounding": (["off", "on"], {"default": "off", "advanced": True, "tooltip": "Enable search grounding to allow the model to search the web for up-to-date information."}),
@@ -506,9 +506,6 @@ class ETNodesGeminiApiText:
     FUNCTION = "execute"
 
     def execute(self, prompt, system_prompt, model, safety_level, thinking_level, search_grounding, temperature, top_p, top_k, context_caching, cache_ttl, seed, API_key=None, images=None, audio=None, video=None):
-        if "Coming Soon" in model:
-            raise Exception("Gemini 3.5 Pro has not been released yet by Google. Please choose an active model.")
-
         # Map legacy models to prevent breaking existing workflows
         if model == "gemini-2.5-flash":
             model = "gemini-3.5-flash"
