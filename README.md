@@ -60,7 +60,7 @@ A powerhouse node that allows you to generate and edit images using the latest G
 A wildly versatile multimodal node that connects directly to Gemini LLMs for text generation and reasoning. It can simultaneously analyze, describe, and synthesize information from a combination of text, images, audio, and video inputs.
 
 **Key Features:**
-- **Supported Models**: `gemini-3.5-flash` (Default), `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite`.
+- **Supported Models**: `gemini-3.6-flash` (Default), `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`.
 - **True Multimodality**: Feed it text prompts, standard ComfyUI images, audio, or even direct video files!
 - **Thinking Level Control**: Control the reasoning depth (High, Medium, Low) to balance output quality and generation speed for reasoning-enabled models.
 - **Search Grounding**: Connect the LLM to live Google Search results for real-time querying and research directly inside ComfyUI.
